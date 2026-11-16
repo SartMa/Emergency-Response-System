@@ -55,3 +55,16 @@ def make_client(base_url: str = "", timeout: float = HTTP_TIMEOUT_S) -> httpx.As
         timeout=httpx.Timeout(timeout, connect=min(1.0, timeout)),
         event_hooks={"request": [_add_correlation_header]},
     )
+
+
+def parse_if_match(if_match: str | None) -> int | None:
+    """ETag/If-Match carry the storage version: `"7"` (quotes and W/ prefix tolerated).
+    Exposing the version as an ETag makes optimistic concurrency part of the HTTP API (ADR-06)."""
+    from services.common.errors import BadRequest
+
+    if if_match is None:
+        return None
+    try:
+        return int(if_match.replace("W/", "").strip().strip('"'))
+    except ValueError:
+        raise BadRequest('If-Match must be a version number, e.g. "3"')

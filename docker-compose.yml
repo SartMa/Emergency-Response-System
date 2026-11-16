@@ -1,0 +1,87 @@
+# Local development: the same topology as Kubernetes, on plain Docker.
+#   docker compose up --build -d
+#   API:        http://localhost:8080   (gateway; e.g. POST /requests)
+#   Dashboard:  http://localhost:8090/dashboard
+#   RabbitMQ:   http://localhost:15672  (guest / guest)
+
+x-env: &common-env
+  COORDINATOR_URL: http://coordinator:8000
+  RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+  REQUEST_SERVICE_URL: http://request-service:8000
+  RESOURCE_SERVICE_URL: http://resource-service:8000
+
+x-storage: &storage
+  build: { context: ., args: { SERVICE: storage_node } }
+  image: erm/storage_node:latest
+  restart: unless-stopped
+  depends_on: [coordinator]
+
+services:
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    ports: ["15672:15672"]
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      retries: 20
+
+  coordinator:
+    build: { context: ., args: { SERVICE: coordinator } }
+    image: erm/coordinator:latest
+    restart: unless-stopped
+    environment:
+      <<: *common-env
+      HEARTBEAT_INTERVAL_S: "2"
+      SUSPECT_AFTER_S: "4"
+      DEAD_AFTER_S: "6"
+      FORMING_GRACE_S: "5"
+    ports: ["8090:8000"]
+
+  # 3 shards x 2 nodes. Each node has its own volume, so a restarted node keeps its old data
+  # and only catches up on what it missed (delta resync, DESIGN.md §5.5).
+  shard-0-0: { <<: *storage, environment: { <<: *common-env, NODE_ID: shard-0-0, SHARD_ID: "0", NODE_URL: http://shard-0-0:8000, DATA_DIR: /data }, volumes: ["shard-0-0:/data"] }
+  shard-0-1: { <<: *storage, environment: { <<: *common-env, NODE_ID: shard-0-1, SHARD_ID: "0", NODE_URL: http://shard-0-1:8000, DATA_DIR: /data }, volumes: ["shard-0-1:/data"] }
+  shard-1-0: { <<: *storage, environment: { <<: *common-env, NODE_ID: shard-1-0, SHARD_ID: "1", NODE_URL: http://shard-1-0:8000, DATA_DIR: /data }, volumes: ["shard-1-0:/data"] }
+  shard-1-1: { <<: *storage, environment: { <<: *common-env, NODE_ID: shard-1-1, SHARD_ID: "1", NODE_URL: http://shard-1-1:8000, DATA_DIR: /data }, volumes: ["shard-1-1:/data"] }
+  shard-2-0: { <<: *storage, environment: { <<: *common-env, NODE_ID: shard-2-0, SHARD_ID: "2", NODE_URL: http://shard-2-0:8000, DATA_DIR: /data }, volumes: ["shard-2-0:/data"] }
+  shard-2-1: { <<: *storage, environment: { <<: *common-env, NODE_ID: shard-2-1, SHARD_ID: "2", NODE_URL: http://shard-2-1:8000, DATA_DIR: /data }, volumes: ["shard-2-1:/data"] }
+
+  request-service:
+    build: { context: ., args: { SERVICE: request_service } }
+    image: erm/request_service:latest
+    restart: unless-stopped
+    environment: *common-env
+    depends_on: [coordinator, rabbitmq]
+
+  resource-service:
+    build: { context: ., args: { SERVICE: resource_service } }
+    image: erm/resource_service:latest
+    restart: unless-stopped
+    environment: *common-env
+    depends_on: [coordinator, rabbitmq]
+
+  matching-service:
+    build: { context: ., args: { SERVICE: matching_service } }
+    image: erm/matching_service:latest
+    restart: unless-stopped
+    environment:
+      <<: *common-env
+      MATCH_STRATEGY: nearest
+      MAX_RADIUS_KM: "50"
+    depends_on: [request-service, resource-service, rabbitmq]
+    deploy:
+      replicas: 2  # competing consumers on matching.q
+
+  gateway:
+    image: nginx:1.27-alpine
+    volumes: ["./deploy/gateway/nginx.conf:/etc/nginx/conf.d/default.conf:ro"]
+    ports: ["8080:8080"]
+    depends_on: [request-service, resource-service, matching-service]
+
+volumes:
+  shard-0-0: {}
+  shard-0-1: {}
+  shard-1-0: {}
+  shard-1-1: {}
+  shard-2-0: {}
+  shard-2-1: {}
