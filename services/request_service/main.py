@@ -11,8 +11,10 @@ Internal (matching-service only):
 """
 
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Header, Response
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
 from services.common.amqp import AmqpClient
@@ -89,6 +91,15 @@ async def assign(request_id: str, body: Assignment, response: Response,
 async def unmatched(request_id: str, response: Response):
     req, version = await service.mark_unmatched(request_id)
     return view(req, version, response)
+
+
+LANDING_HTML = (Path(__file__).parent / "static" / "index.html").read_text()
+
+
+@app.get("/", response_class=HTMLResponse, include_in_schema=False)
+async def landing():
+    """Landing page: a short presentation plus a live console. It only uses the public API."""
+    return LANDING_HTML
 
 
 @app.get("/ready", include_in_schema=False)

@@ -19,7 +19,7 @@ client → Ingress → request-service ─┐            ┌→ matching-service
 ## Quick start
 
 ```bash
-make up        # docker compose: API on :8080, live dashboard on http://localhost:8090/dashboard
+make up        # docker compose: landing page + API on http://localhost:8080, dashboard on http://localhost:8090/dashboard
 make test      # unit + integration tests
 
 curl -X POST localhost:8080/resources -H 'Content-Type: application/json' \

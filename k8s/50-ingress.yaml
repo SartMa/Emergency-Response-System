@@ -10,6 +10,7 @@ spec:
   rules:
     - http:
         paths:
+          - { path: /,          pathType: Exact,  backend: { service: { name: request-service,  port: { number: 8000 } } } }   # landing page
           - { path: /requests,  pathType: Prefix, backend: { service: { name: request-service,  port: { number: 8000 } } } }
           - { path: /resources, pathType: Prefix, backend: { service: { name: resource-service, port: { number: 8000 } } } }
           - { path: /match,     pathType: Prefix, backend: { service: { name: matching-service, port: { number: 8000 } } } }
