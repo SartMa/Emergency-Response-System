@@ -4,6 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Emergency Resource Matching</title>
+<!-- Map library (needs internet at demo time, as do the map tiles; the page works without it). -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <style>
   :root {
     --bg: #f5f6f8; --card: #ffffff; --text: #1b2130; --muted: #667085; --border: #e2e5ea;
@@ -79,6 +82,24 @@
   .links a { color: var(--accent); font-weight: 600; text-decoration: none; margin-right: 18px; white-space: nowrap; }
   .links a:hover { text-decoration: underline; }
   footer { color: var(--muted); font-size: 13px; margin-top: 40px; }
+
+  /* map */
+  .map-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+  .map-head h3 { margin: 0; }
+  #map { height: 440px; border-radius: 10px; border: 1px solid var(--border); background: var(--bg); z-index: 0; }
+  #map.off { display: grid; place-items: center; color: var(--muted); text-align: center; padding: 16px; }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12.5px; color: var(--muted); margin-top: 10px; }
+  .legend i { display: inline-block; width: 10px; height: 10px; margin-right: 5px; vertical-align: -1px; }
+  .legend .sq { border-radius: 2px; } .legend .dot { border-radius: 50%; }
+  .res-pin { color: #fff; font: 700 11px/20px system-ui, sans-serif; text-align: center; border-radius: 5px;
+             border: 2px solid #fff; box-shadow: 0 1px 4px rgba(0,0,0,.35); }
+  .pick-pin { width: 14px; height: 14px; border-radius: 50%; background: var(--accent); border: 3px solid #fff;
+              box-shadow: 0 0 0 2px var(--accent); }
+  .leaflet-tooltip { font: 12.5px/1.4 system-ui, sans-serif; }
+  .osm-tiles { filter: saturate(.55) contrast(.95); }  /* calmer basemap so our pins stand out */
+  @media (prefers-color-scheme: dark) {
+    .osm-tiles { filter: invert(1) hue-rotate(180deg) brightness(.85) contrast(.9) saturate(.4); }
+  }
   @media (max-width: 420px) { .row { grid-template-columns: 1fr; } }
 </style>
 </head>
@@ -135,6 +156,24 @@
         <button>Create request</button>
         <div class="result" id="r-req"></div>
       </form>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:12px">
+    <div class="map-head">
+      <h3>Live map</h3>
+      <span>
+        <button class="ghost" id="view-mumbai" type="button">Mumbai</button>
+        <button class="ghost" id="view-all" type="button">Show everything</button>
+      </span>
+    </div>
+    <div id="map"></div>
+    <div class="legend">
+      <span><i class="sq" style="background:#0284c7"></i>resource (number = units left)</span>
+      <span><i class="dot" style="background:#2563eb"></i>pending</span>
+      <span><i class="dot" style="background:#16a34a"></i>matched (dashed line to its resource)</span>
+      <span><i class="dot" style="background:#d97706"></i>waiting for supply</span>
+      <span>Click the map to pick a location for the forms.</span>
     </div>
   </div>
 
@@ -199,7 +238,84 @@ async function api(method, path, body) {
   if (!r.ok) throw new Error(data.error ? `${r.status} ${data.error.code}: ${data.error.message}` : `HTTP ${r.status}`);
   return data;
 }
-const place = f => { const p = PLACES[+f.place.value]; return { lat: p[1], lon: p[2], label: p[0] }; };
+let picked = null;  // {lat, lon} chosen by clicking the map
+const place = f => {
+  if (f.place.value === 'map' && picked) return { lat: picked.lat, lon: picked.lon, label: 'Picked on map' };
+  const p = PLACES[+f.place.value]; return { lat: p[1], lon: p[2], label: p[0] };
+};
+
+// ------------------------------------------------------------------ live map
+const TYPE_COLOR = { water: '#0284c7', food: '#16a34a', medicine: '#dc2626', transportation: '#7c3aed', shelter: '#d97706' };
+const STATUS_COLOR = { PENDING: '#2563eb', ASSIGNED: '#16a34a', IN_PROGRESS: '#16a34a', FULFILLED: '#15803d',
+                       UNMATCHED: '#d97706', CANCELLED: '#9ca3af' };
+const MUMBAI = [[19.00, 72.81], [19.21, 73.03]];
+let map = null, layer = null, pickMarker = null, flyTo = null;
+
+function initMap() {
+  const el = $('map');
+  if (typeof L === 'undefined') {
+    el.classList.add('off');
+    el.textContent = 'The map needs an internet connection (map library and tiles come from a CDN). Everything else on this page works without it.';
+    return;
+  }
+  map = L.map(el, { preferCanvas: true, scrollWheelZoom: false }).fitBounds(MUMBAI);
+  // Standard OpenStreetMap tiles: free, no API key, attribution required. Fine for a demo's light use.
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 18, className: 'osm-tiles',
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+  }).addTo(map);
+  layer = L.layerGroup().addTo(map);
+
+  map.on('click', e => {
+    picked = { lat: +e.latlng.lat.toFixed(5), lon: +e.latlng.lng.toFixed(5) };
+    const icon = L.divIcon({ className: '', html: '<div class="pick-pin"></div>', iconSize: [20, 20], iconAnchor: [10, 10] });
+    if (pickMarker) pickMarker.setLatLng(e.latlng); else pickMarker = L.marker(e.latlng, { icon, zIndexOffset: 1000 }).addTo(map);
+    pickMarker.bindTooltip(`Picked: ${picked.lat}, ${picked.lon}`).openTooltip();
+    document.querySelectorAll('select[name=place]').forEach(s => {
+      let opt = s.querySelector('option[value=map]');
+      if (!opt) { opt = document.createElement('option'); opt.value = 'map'; s.prepend(opt); }
+      opt.textContent = `Picked on map (${picked.lat.toFixed(3)}, ${picked.lon.toFixed(3)})`;
+      s.value = 'map';
+    });
+  });
+  $('view-mumbai').onclick = () => map.fitBounds(MUMBAI);
+  $('view-all').onclick = () => {
+    const pts = [];
+    layer.eachLayer(l => l.getLatLng && pts.push(l.getLatLng()));
+    if (pts.length) map.fitBounds(L.latLngBounds(pts), { padding: [30, 30] });
+  };
+}
+
+function drawMap(requests, resources) {
+  if (!map) return;
+  layer.clearLayers();
+  const byId = Object.fromEntries(resources.map(r => [r.id, r]));
+  // dashed line from every matched request to the resource serving it
+  for (const r of requests) {
+    const res = r.assignment && byId[r.assignment.resource_id];
+    if (res && ['ASSIGNED', 'IN_PROGRESS'].includes(r.status)) {
+      L.polyline([[r.location.lat, r.location.lon], [res.location.lat, res.location.lon]],
+                 { color: '#16a34a', weight: 2, opacity: .7, dashArray: '5 6' }).addTo(layer);
+    }
+  }
+  for (const r of requests) {
+    L.circleMarker([r.location.lat, r.location.lon], { radius: 6, weight: 2, color: '#fff',
+        fillColor: STATUS_COLOR[r.status] || '#666', fillOpacity: .95 })
+      .bindTooltip(`<b>${esc(r.type)}</b> × ${r.quantity} · urgency ${r.urgency}<br>${r.status}` +
+                   (r.assignment ? `<br>→ ${esc(byId[r.assignment.resource_id]?.name || 'resource')}, ${r.assignment.distance_km} km` : ''))
+      .addTo(layer);
+  }
+  for (const res of resources) {
+    const left = res.availability.quantity_remaining;
+    const w = Math.max(22, String(left).length * 8 + 10);
+    const icon = L.divIcon({ className: '', iconSize: [w, 24], iconAnchor: [w / 2, 12],
+      html: `<div class="res-pin" style="background:${TYPE_COLOR[res.type] || '#666'};opacity:${res.status === 'AVAILABLE' ? 1 : .45}">${left}</div>` });
+    L.marker([res.location.lat, res.location.lon], { icon })
+      .bindTooltip(`<b>${esc(res.name)}</b><br>${esc(res.type)} · ${left}/${res.availability.quantity_total} left · ${res.status}`)
+      .addTo(layer);
+  }
+  if (flyTo) { map.flyTo(flyTo, Math.max(map.getZoom(), 12), { duration: .8 }); flyTo = null; }
+}
 
 async function submit(form, out, fn) {
   const btn = form.querySelector('button');
@@ -216,6 +332,7 @@ $('f-req').addEventListener('submit', e => { e.preventDefault(); const f = e.tar
   submit(f, $('r-req'), async () => {
     const r = await api('POST', '/requests', { type: f.type.value, quantity: +f.quantity.value, urgency: +f.urgency.value,
                                                location: place(f), details: 'created from the landing page' });
+    flyTo = [r.location.lat, r.location.lon];
     setTimeout(refresh, 700);
     return `Created ${r.id.slice(0, 8)}: stored as ${r.status}` + (r.queued_for_matching ? ' and queued for matching.' : ' (broker down: not queued).');
   }); });
@@ -230,12 +347,14 @@ async function resourceName(id) {
 
 async function refresh() {
   try {
-    const [reqs, res] = await Promise.all([api('GET', '/requests'), api('GET', '/resources?status=AVAILABLE')]);
-    const count = s => reqs.items.filter(r => r.status === s).length;
+    const [reqs, res] = await Promise.all([api('GET', '/requests?limit=200'), api('GET', '/resources')]);
+    const count = s => reqs.by_status[s] || 0;
     $('s-total').textContent = reqs.count;
     $('s-assigned').textContent = count('ASSIGNED') + count('IN_PROGRESS') + count('FULFILLED');
     $('s-unmatched').textContent = count('UNMATCHED') + count('PENDING');
-    $('s-res').textContent = res.count;
+    $('s-res').textContent = res.items.filter(r => r.status === 'AVAILABLE').length;
+    res.items.forEach(r => names[r.id] = r.name);
+    drawMap(reqs.items, res.items);
     const rows = await Promise.all(reqs.items.slice(0, 8).map(async r => {
       const a = r.assignment;
       const matched = a ? `${esc(await resourceName(a.resource_id))} <span class="muted">· ${a.distance_km} km</span>` : '<span class="muted">–</span>';
@@ -251,6 +370,7 @@ async function refresh() {
   }
 }
 $('dash').href = `${location.protocol}//${location.hostname}:8090/dashboard`;
+initMap();
 refresh(); setInterval(refresh, 3000);
 </script>
 </body>

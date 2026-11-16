@@ -55,6 +55,8 @@ Keep `http://localhost:8090/dashboard` visible next to the terminal the whole ti
 | 8 | `09-k8s-scale.sh` | K8s scaling | 4 pods share the queue roughly evenly |
 | 9 | `make chaos` (beyond the spec) | Proof under repeated failure | 2 min of random kills, then 6 checks print PASS; watch "copies identical" on the dashboard return after each kill |
 
+Start the demo with `00-seed-mumbai.sh` and the landing page at http://localhost:8080 (live map, needs internet). Creating a request from the page makes the map fly to it; a few seconds later its dot turns green with a dashed line to the resource serving it.
+
 Demo 08 restarts the coordinator, so restart `make k8s-dashboard` after it.
 For a longer "during" window in demo 06 on Kubernetes, scale the StatefulSet instead of deleting a pod:
 `kubectl -n erm scale sts/shard-0 --replicas=1` (removes `shard-0-1`), then `--replicas=2`.

@@ -10,10 +10,11 @@ Internal (matching-service only):
   POST /internal/requests/{id}/unmatched   no resource available
 """
 
+from collections import Counter
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Header, Response
+from fastapi import FastAPI, Header, Query, Response
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
@@ -68,9 +69,15 @@ async def get_request(request_id: str, response: Response):
 
 
 @app.get("/requests")
-async def list_requests(status: RequestStatus | None = None, type: str | None = None):
+async def list_requests(status: RequestStatus | None = None, type: str | None = None,
+                        limit: int | None = Query(default=None, ge=1, le=10_000)):
+    """Newest first. `count` and `by_status` always describe ALL matching requests;
+    `limit` only caps how many items are returned (the landing page asks for 200)."""
     reqs, partial = await service.list(status, type)
-    return {"count": len(reqs), "partial": partial, "items": [r.model_dump(mode="json") for r in reqs]}
+    by_status = dict(Counter(r.status.value for r in reqs))
+    items = reqs[:limit] if limit else reqs
+    return {"count": len(reqs), "by_status": by_status, "partial": partial,
+            "items": [r.model_dump(mode="json") for r in items]}
 
 
 @app.put("/requests/{request_id}/status")
