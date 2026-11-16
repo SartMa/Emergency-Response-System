@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ERM Cluster</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #ffffff; --text: #1d2330; --muted: #6b7280; --border: #e3e6eb;
+    --ok: #15803d; --ok-bg: #dcfce7; --warn: #a16207; --warn-bg: #fef3c7;
+    --bad: #b91c1c; --bad-bg: #fee2e2; --info: #1d4ed8; --info-bg: #dbeafe;
+    --s0: #6366f1; --s1: #0d9488; --s2: #d97706;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1218; --card: #181c24; --text: #e5e7eb; --muted: #9ca3af; --border: #2a303b;
+      --ok: #4ade80; --ok-bg: #14301f; --warn: #fbbf24; --warn-bg: #33290f;
+      --bad: #f87171; --bad-bg: #3a1717; --info: #93c5fd; --info-bg: #172544;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 1200px; margin: 0 auto; padding: 20px 16px 40px; }
+  header { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+  h1 { font-size: 20px; margin: 0; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 24px 0 8px; }
+  .muted { color: var(--muted); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 12px; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 14px; }
+  .card.down { border-color: var(--bad); }
+  .shard-title { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; font-weight: 600; }
+  .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; }
+  .node { border: 1px solid var(--border); border-radius: 8px; padding: 10px; margin-top: 8px; }
+  .node.primary { border-width: 2px; }
+  .node-head { display: flex; justify-content: space-between; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .node-id { font-family: ui-monospace, monospace; font-weight: 600; }
+  .badges { display: flex; gap: 4px; flex-wrap: wrap; }
+  .b { font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 999px; }
+  .ok { color: var(--ok); background: var(--ok-bg); }
+  .warn { color: var(--warn); background: var(--warn-bg); }
+  .bad { color: var(--bad); background: var(--bad-bg); }
+  .info { color: var(--info); background: var(--info-bg); }
+  .stats { display: flex; gap: 14px; margin-top: 6px; color: var(--muted); font-size: 13px; }
+  .stats b { color: var(--text); font-variant-numeric: tabular-nums; }
+  .pmap { display: grid; grid-template-columns: repeat(12, 1fr); gap: 4px; }
+  .pcell { text-align: center; padding: 8px 0; border-radius: 6px; color: #fff; font-size: 12px; font-weight: 600; }
+  .events { list-style: none; margin: 0; padding: 0; font-size: 13px; }
+  .events li { padding: 6px 0; border-bottom: 1px solid var(--border); display: flex; gap: 10px; }
+  .events .age { color: var(--muted); min-width: 56px; font-variant-numeric: tabular-nums; }
+  #status.err { color: var(--bad); }
+  @media (max-width: 600px) { .pmap { grid-template-columns: repeat(6, 1fr); } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Emergency Resource Matching: storage cluster</h1>
+    <span id="status" class="muted">connecting…</span>
+  </header>
+
+  <h2>Shards (primary + replica)</h2>
+  <div id="shards" class="grid"></div>
+
+  <h2>Partition map: sha1(key) mod 12 → shard</h2>
+  <div id="pmap" class="pmap card"></div>
+
+  <h2>Recent cluster events</h2>
+  <div class="card"><ul id="events" class="events"></ul></div>
+</main>
+<script>
+const SHARD_COLORS = ['var(--s0)', 'var(--s1)', 'var(--s2)', '#db2777', '#0284c7'];
+const HEALTH = { ALIVE: 'ok', SUSPECT: 'warn', DEAD: 'bad' };
+const SYNC = { IN_SYNC: 'ok', SYNCING: 'info', STALE: 'warn' };
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+function nodeHtml(n) {
+  const counts = n.key_counts || {};
+  return `<div class="node ${n.role === 'PRIMARY' ? 'primary' : ''}">
+    <div class="node-head">
+      <span class="node-id">${esc(n.node_id)}</span>
+      <span class="badges">
+        <span class="b ${n.role === 'PRIMARY' ? 'info' : 'muted'}">${n.role}</span>
+        <span class="b ${HEALTH[n.health]}">${n.health}</span>
+        <span class="b ${SYNC[n.sync]}">${n.sync}</span>
+      </span>
+    </div>
+    <div class="stats">
+      <span>requests <b>${counts.req || 0}</b></span>
+      <span>resources <b>${counts.res || 0}</b></span>
+      <span>heartbeat <b>${n.heartbeat_age_s}s</b> ago</span>
+    </div>
+  </div>`;
+}
+
+function render(c) {
+  document.getElementById('shards').innerHTML = c.shards.map(s => `
+    <div class="card ${s.available ? '' : 'down'}">
+      <div class="shard-title">
+        <span><span class="swatch" style="background:${SHARD_COLORS[s.shard_id]}"></span>Shard ${s.shard_id}</span>
+        <span class="b ${s.available ? 'ok' : 'bad'}">${s.available ? 'AVAILABLE' : 'UNAVAILABLE'}</span>
+      </div>
+      ${s.nodes.length ? s.nodes.map(nodeHtml).join('') : '<div class="muted">no nodes registered</div>'}
+    </div>`).join('');
+
+  document.getElementById('pmap').innerHTML = Object.entries(c.partition_map).map(([p, s]) =>
+    `<div class="pcell" style="background:${SHARD_COLORS[s]}" title="partition ${p} → shard ${s}">p${p}→${s}</div>`).join('');
+
+  document.getElementById('events').innerHTML = c.events.length
+    ? c.events.map(e => `<li><span class="age">${e.age_s}s ago</span><span>${esc(e.message)}</span></li>`).join('')
+    : '<li class="muted">no events yet</li>';
+
+  const st = document.getElementById('status');
+  st.className = 'muted';
+  st.textContent = (c.forming ? 'forming (waiting for nodes)… ' : '') + 'live · updated ' + new Date().toLocaleTimeString();
+}
+
+async function poll() {
+  try {
+    const r = await fetch('/internal/cluster', { cache: 'no-store' });
+    render(await r.json());
+  } catch (e) {
+    const st = document.getElementById('status');
+    st.className = 'err';
+    st.textContent = 'coordinator unreachable: ' + e.message;
+  }
+  setTimeout(poll, 1000);
+}
+poll();
+</script>
+</body>
+</html>

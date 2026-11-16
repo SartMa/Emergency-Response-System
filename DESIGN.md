@@ -1,0 +1,326 @@
+# Distributed Emergency Resource Matching System — Design
+
+> **Status: FROZEN (2026-11-16).** From now on, any change needs an ADR update (§7) and team approval.
+>
+> Spec: `Emergency Response Matching-1.pdf` · Deadline: **2026-11-18**
+
+---
+
+## 1. Goals in one paragraph
+
+People affected by a disaster create emergency requests (water, food, medicine, transportation, shelter). Volunteers, NGOs and supply holders register resources. The system matches each request **asynchronously** to the **nearest suitable available** resource, and it **never assigns the same unit of capacity twice**. Data is spread across **3 shards × 2 nodes** (primary + replica) behind a **coordinator**. The system keeps working when a storage node dies, and repairs that node when it comes back. Everything runs in Docker and Kubernetes.
+
+---
+
+## 2. Functional requirements
+
+### 2.1 From the spec (mandatory)
+
+| ID | Requirement | Spec ref |
+|---|---|---|
+| FR-1 | `createRequest(type, location, details)`: store the request, return 201 with an ID, and start asynchronous matching | §1, §7 |
+| FR-2 | `getRequest(id)`: return the request, including status and assigned resource | §1 |
+| FR-3 | `updateStatus(requestId, status)`: change the request status, only through valid transitions (§4.3) | §1 |
+| FR-4 | `registerResource(type, location, availability)`: store the resource, return 201 | §1 |
+| FR-5 | `GET /resources`: list resources, with optional `type` / `status` filters | §5 |
+| FR-6 | `PUT /resources/{id}/status`: change resource status/availability | §5 |
+| FR-7 | `matchRequest(requestId)`: synchronous match on demand (`POST /match/{id}`) | §1, §5 |
+| FR-8 | Matching considers at least **type** and **location** | §7 |
+| FR-9 | Request → RabbitMQ → Matching Service pipeline (asynchronous) | §6, §7 |
+| FR-10 | Coordinator routes every storage operation by hash; clients never see shard locations | §4 |
+| FR-11 | Storage nodes register with the coordinator and send heartbeats | §6, §8 |
+| FR-12 | Detect dead nodes, stop routing to them, serve from the replica, keep processing | §8 |
+| FR-13 | When a node recovers, it is synchronised before it serves reads again | §8 |
+| FR-14 | JSON everywhere; correct HTTP codes (2xx / 400 / 404 / 409 / 503) | §5 |
+
+### 2.2 Our additions (the features that set this project apart)
+
+**Tier 1** = build now, before handover. **Tier 2** = add later, in the cut order of §8.4.
+
+| ID | Requirement | Tier | Why it matters |
+|---|---|---|---|
+| FR-15 | **Geo matching**: locations are lat/lon; ranked by great-circle (haversine) distance within a max radius (`nearest` strategy; `balanced` is Tier 2) | 1 | "Location" means real distance, not string equality |
+| FR-16 | **Urgency 1–5** on requests → RabbitMQ **priority queue** | 1 | Medicine for a critical patient goes before a shelter query |
+| FR-17 | **Resource quantity**: a resource has a quantity (e.g. 40 food packets); a request asks for a quantity (default 1) and is matched only to a resource with enough left (no splitting across resources). A specific volunteer or vehicle is registered with quantity 1 | 1 | Real-world model; shows concurrency control |
+| FR-18 | **No over-allocation, even under concurrency**, through optimistic concurrency (versions + `If-Match`) | 1 | Correctness under scaling; other teams will have a race here |
+| FR-19 | **Auto-retry** of unmatched requests with TTL backoff + DLQ; a new resource of that type **wakes up** waiting `UNMATCHED` requests | 2 | Supply often arrives after demand. Tier 1 behaviour: no match → `UNMATCHED`; `POST /match` retries manually |
+| FR-20 | **Cancel → compensation**: cancelling an assigned request returns its quantity to the resource (saga) | 1 | Keeps request and resource consistent without distributed transactions |
+| FR-21 | **Live cluster dashboard**: partition map, node roles and health, key counts (queue depths in Tier 2), updated every second | 1 | Makes the failure/recovery demo visible |
+| FR-22 | `GET /internal/locate/{key}`: shows partition → shard → nodes for any key | 1 | Makes the "data distribution" demo trivial |
+| FR-23 | **Status history** (audit trail) stored on each request | 1 | Traceability; easy to show in the demo |
+
+Also Tier 2: reconciler for lost messages (§6.2), `balanced` strategy (§6.3), HPA, Prometheus `/metrics`.
+
+---
+
+## 3. Non-functional requirements
+
+| ID | Quality | Target / mechanism |
+|---|---|---|
+| NFR-1 | **Availability** | Survive the loss of **any one node per shard** with no failed client operations (fast failover on error, §5.4) |
+| NFR-2 | **Durability** | An acknowledged write exists on primary **and** replica (synchronous replication). Each node persists to SQLite on a PersistentVolume |
+| NFR-3 | **Consistency** | Reads go to the shard primary → read-your-writes. Conditional writes → no lost updates and no double assignment |
+| NFR-4 | **Fault tolerance** | Failure detection within ≤ 6 s by heartbeat, immediately on a request error. Recovered node is resynced automatically |
+| NFR-5 | **Scalability** | Request, resource and matching services are stateless and scale horizontally; matching pods are competing consumers |
+| NFR-6 | **Performance** (local minikube) | Create request p95 < 200 ms; asynchronous match completes < 2 s after create when supply exists |
+| NFR-7 | **Observability** | Structured JSON logs with a **correlation ID** that follows a request across HTTP and AMQP; dashboard; RabbitMQ management UI |
+| NFR-8 | **Maintainability** | Hexagonal layering per service; pluggable strategies; one shared `common` package; ADRs for every decision |
+| NFR-9 | **Testability** | Domain logic is pure (no I/O) and unit-tested. Integration tests run on docker-compose. Demo scripts mirror spec §10 |
+| NFR-10 | **Portability** | Same images run on docker-compose and minikube; all config through env vars / ConfigMap |
+| NFR-11 | **Graceful degradation** | If RabbitMQ is down, requests are still stored (201) and queued later by the reconciler. If a shard is fully down, list queries return `partial: true` instead of failing |
+| NFR-12 | **Security** (minimal, stated) | Only the Ingress is exposed; `/internal/*` is reachable only inside the cluster; RabbitMQ creds in a Secret. Auth is out of scope |
+
+---
+
+## 4. Architecture
+
+### 4.1 Style
+- **Microservices + event-driven** (choreography over RabbitMQ), with a **storage tier** (coordinator + shard nodes) underneath.
+- **Hexagonal (ports and adapters)** inside every service: `api/` (HTTP adapters) → `domain/` (pure logic: state machines, matching) → `adapters/` (coordinator client, AMQP, SQLite).
+
+### 4.2 Component diagram
+
+```
+                         ┌──────────────────── Kubernetes namespace: erm ─────────────────────┐
+ Client (curl / script)  │                                                                     │
+ ────────HTTP──────────▶ │  Ingress (API Gateway)                                              │
+                         │   /requests ─▶ request-service ×2      /resources ─▶ resource-service ×2
+                         │   /match    ─▶ matching-service ×2                                   │
+                         │                                                                     │
+                         │   request-service ──cmd: match.request──▶ ┌──────────┐              │
+                         │                                           │ RabbitMQ │──▶ matching-service
+                         │   all services ──events: request.*,──────▶│ (1 pod)  │──▶ resource-service
+                         │                   resource.*              └──────────┘   (release on cancel)
+                         │                                                                     │
+                         │   matching-service ──HTTP (If-Match)──▶ resource-service / request-service
+                         │                                                                     │
+                         │   request/resource services ──HTTP──▶ coordinator ×1  (+ /dashboard) │
+                         │                                         │  ▲ register / heartbeat   │
+                         │            ┌────────────────────────────┼──┴──────────────┐         │
+                         │            ▼                            ▼                 ▼         │
+                         │   shard-0: [shard-0-0][shard-0-1]  shard-1: [..-0][..-1]  shard-2: [..-0][..-1]
+                         │            (StatefulSet, 2 pods, each with SQLite on a PVC)          │
+                         └─────────────────────────────────────────────────────────────────────┘
+```
+
+### 4.3 Services and their responsibilities
+
+| Component | Owns | Replicas | K8s kind |
+|---|---|---|---|
+| **request-service** | Requests (`req:*` keys): create, get, status transitions, publish match commands, reconciler | 2 | Deployment |
+| **resource-service** | Resources (`res:*` keys): register, list, status/capacity, reserve/release (`If-Match`), consumes cancel events | 2 | Deployment |
+| **matching-service** | Matching logic only (no data of its own): consumes `match.request`, ranks candidates, runs the assignment saga; also serves `POST /match/{id}` | 2 (scalable) | Deployment |
+| **coordinator** | Cluster map (partitions → shards → nodes, roles, health), routing, replication, failover, resync orchestration, dashboard | 1 (spec) | Deployment |
+| **storage node** | A SQLite KV store with versions, local secondary index on (kind, type, status) | 3 shards × 2 | StatefulSet per shard |
+| **RabbitMQ** | Broker (+ management UI) | 1 (spec) | StatefulSet |
+
+Each service owns its data (**database-per-service**, done logically through key namespaces). Matching never writes to storage directly; it goes through the owning service's API.
+
+### 4.4 Data model
+
+**Request** (`req:<uuid>`)
+```json
+{ "id": "…", "type": "water|food|medicine|transportation|shelter",
+  "location": {"lat": 19.07, "lon": 72.87, "label": "Kurla West"},
+  "details": "4 people, no drinking water", "urgency": 1-5, "quantity": 4,
+  "status": "PENDING", "assigned_resource_id": null,
+  "match_attempts": 0, "history": [{"status": "PENDING", "at": "…"}],
+  "created_at": "…", "updated_at": "…", "version": 3 }
+```
+
+**Resource** (`res:<uuid>`)
+```json
+{ "id": "…", "type": "water", "name": "Tanker MH-01", "provider": "VOLUNTEER|NGO|SUPPLY",
+  "location": {"lat": …, "lon": …, "label": "…"},
+  "availability": {"quantity_total": 40, "quantity_remaining": 36},
+  "status": "AVAILABLE|EXHAUSTED|OFFLINE",
+  "allocations": [{"request_id": "…", "quantity": 4}],
+  "created_at": "…", "updated_at": "…", "version": 7 }
+```
+Quantity is **one integer on one record**. The units are interchangeable (one food packet is as good as another), so they don't need their own IDs, the same way a shop tracks "40 in stock" rather than 40 records. Things that are *not* interchangeable (a particular volunteer, a particular ambulance) are registered as separate resources with quantity 1. The `allocations` list records who got how much, so that a cancel can give exactly that amount back.
+
+**Request state machine** (State pattern; an invalid transition → `409`)
+```
+PENDING ──match──▶ ASSIGNED ──▶ IN_PROGRESS ──▶ FULFILLED
+   │  └─retries exhausted─▶ UNMATCHED ──match/new supply──▶ ASSIGNED
+   └──────────────┬─────────────┬──────────────┬─▶ CANCELLED  (from PENDING/UNMATCHED/ASSIGNED/IN_PROGRESS;
+                                                               releases capacity if assigned)
+```
+Clients may set `IN_PROGRESS`, `FULFILLED` and `CANCELLED`. Only the matching saga sets `ASSIGNED`.
+
+**Resource status** is derived: `quantity_remaining > 0 → AVAILABLE`, `= 0 → EXHAUSTED`. `OFFLINE` is set manually and overrides both.
+
+---
+
+## 5. Storage tier (the distributed-systems core)
+
+### 5.1 Partitioning — DDIA ch. 7
+- `partition = sha1(key) mod 12` (**12 fixed logical partitions**). Then `shard = partition_map[partition]`; initially partition `p` is assigned to shard `p mod 3`.
+- We use a stable hash (sha1), never Python's `hash()`, which is randomised per process.
+- Why not plain `hash mod 3`? Changing the shard count would move about 75% of keys. With fixed partitions, only whole partitions move (the Riak/Elasticsearch approach). Rebalancing itself is out of scope, but the design is ready for it.
+- **Terminology warning**: DDIA 2e uses *shard* for a piece of the data, and a node can hold many shards. Our spec uses *shard* for a replicated **group of nodes**. So our 12 *partitions* are what DDIA calls shards, and our 3 *shards* are what DDIA calls nodes (each replicated). DDIA calls this technique a "fixed number of shards".
+- This still satisfies the spec: it is hash-based partitioning, `hash(id) mod 12` followed by a table lookup instead of `mod 3`.
+
+### 5.2 Storage node
+- SQLite table `kv(key PK, kind, type, status, value JSON, version INT, deleted BOOL, updated_at)`, with an index on `(kind, type, status)`. This is a **local secondary index**.
+- **Conditional write**: `PUT /internal/data/{key}` with `expected_version` → `409` on mismatch. On success, the primary sets `version + 1`.
+- **Replica apply**: `PUT` with `mode=replica, version=v` is applied only if `v` > the stored version.
+- Deletes are **tombstones** (versioned), so a resync cannot bring a deleted key back.
+- `GET /internal/digest` returns `{key: [version, sha1(value)]}`, used for anti-entropy.
+
+### 5.3 Replication — DDIA ch. 6 (single-leader, synchronous)
+- Each shard has a **primary** and a **replica**, and the coordinator decides which is which. Nodes never promote themselves, so a split brain between nodes cannot happen.
+- Write path (the coordinator is the replication pipe): write to the primary (CAS, which assigns the version) → forward the same `(value, version)` to the replica → acknowledge the client **after both succeed**.
+- If the replica write fails: acknowledge anyway, mark the replica **STALE** (degraded mode, writes accepted with one copy). It gets resynced later.
+- Reads go to the **primary** only (read-your-writes).
+
+### 5.4 Failure detection and failover — DDIA ch. 9 (unreliable networks, timeouts)
+- Heartbeat every **2 s**. Health states: `ALIVE → SUSPECT (>4 s) → DEAD (>6 s)`.
+- **Fast path**: if a request to the primary fails (connection error or timeout), the coordinator immediately marks it SUSPECT, **promotes the in-sync replica**, and retries the operation once. The client sees no error.
+- If both nodes of a shard are down, operations on that shard return `503`. Scatter-gather queries return `partial: true`.
+
+### 5.5 Recovery — DDIA ch. 6 "catch-up recovery"
+1. The node restarts with its PVC (old data intact) and calls `register` again. The coordinator marks it **RECOVERING**: it receives live writes but serves no reads.
+2. The coordinator calls `POST /internal/sync {source: current primary}`. The node compares digests and pulls only the keys that differ (a **delta**, not a full copy). Keys that exist only on the recovering node are **discarded**, because they were never acknowledged and the primary is authoritative.
+3. When the digests match, the node is marked **REPLICA (in sync)**. There is no automatic fail-back, to avoid flapping.
+
+### 5.6 Coordinator restart (soft state, Tier 1 because it reuses the §5.5 machinery)
+The cluster map is **rebuilt from heartbeats**: nodes re-register within about 2 s. For each shard, the coordinator elects a primary (the node with the highest total version) and resyncs the other node. K8s restarts the coordinator pod, so the single coordinator required by the spec is not a permanent point of failure. Weakness to state in the viva: while the coordinator is down (about 5 s), storage operations return `503`.
+
+### 5.7 Internal APIs
+
+| Where | Endpoint | Purpose |
+|---|---|---|
+| coordinator | `POST /internal/nodes/register`, `POST /internal/nodes/heartbeat` | membership |
+| coordinator | `PUT/GET/DELETE /internal/data/{key}` (`If-Match` supported) | routed KV |
+| coordinator | `GET /internal/query?kind=&type=&status=` | scatter-gather across 3 primaries |
+| coordinator | `GET /internal/cluster`, `GET /internal/locate/{key}`, `GET /dashboard` | observability |
+| storage node | `PUT/GET/DELETE /internal/data/{key}`, `GET /internal/query`, `GET /internal/digest`, `POST /internal/sync`, `GET /internal/stats` | node-local |
+
+---
+
+## 6. Messaging and matching
+
+### 6.1 RabbitMQ topology
+| Exchange | Type | Routing key → Queue | Notes |
+|---|---|---|---|
+| `erm.commands` | direct | `match.request` → `matching.q` | durable, `x-max-priority=5` (urgency), DLX = `erm.dlx`, manual ack, prefetch 10 |
+| `erm.retry` | direct | → `matching.retry.q` | per-message TTL (5 s, 10 s, 20 s…), dead-letters back to `erm.commands` |
+| `erm.events` | topic | `request.cancelled` → `resource.release.q`; `resource.registered` → `matching.wakeup.q`; `#` → `audit.q` | choreography and the event feed |
+| `erm.dlx` | fanout | → `matching.dlq` | poison messages, inspected manually |
+
+### 6.2 Asynchronous matching flow (saga)
+1. request-service stores the request (`PENDING`), then publishes `match.request {request_id, type, urgency}` with priority = urgency and the correlation ID.
+2. matching-service consumes the message. **Idempotency check**: if the request is no longer PENDING/UNMATCHED → ack and skip.
+3. It fetches candidates: `GET resource-service/resources?type=X&status=AVAILABLE` (scatter-gather across shards).
+4. The **MatchingStrategy** drops candidates with `quantity_remaining < request.quantity` or outside the max radius (default 50 km), then ranks the rest (§6.3).
+5. **Reserve** the top candidate: `POST /resources/{id}/reserve {request_id, quantity}` with `If-Match: version` → `quantity_remaining −= quantity`, append to `allocations`. On `409` (someone else changed it first), re-fetch and try the next candidate.
+6. **Assign** the request: PENDING → ASSIGNED with `If-Match`. If that fails (e.g. the request was cancelled meanwhile) → **compensate**: release the reserved quantity.
+7. Publish `request.assigned`, then ack.
+- No candidate → Tier 1: mark `UNMATCHED` and ack. Tier 2: republish to the retry queue with backoff, and mark `UNMATCHED` only after 5 attempts.
+- An unexpected exception → `nack(requeue=false)` → DLQ.
+- *(Tier 2)* `resource.registered` → matching re-queues `UNMATCHED` requests of that type (**wake-up**).
+- *(Tier 2)* **Reconciler** (request-service, every 15 s): re-publishes requests that have been `PENDING` for more than 30 s. This covers messages lost between storing a request and publishing it. Safe because the consumer is idempotent.
+
+### 6.3 Matching strategies (Strategy pattern, `MATCH_STRATEGY` env)
+- `nearest`: minimum haversine distance; ties broken by more remaining capacity.
+- `balanced` (default): `score = distance_km × (1 + load)` where `load = 1 − remaining/total`. This spreads requests away from providers that are almost full.
+
+---
+
+## 7. Design decisions (ADRs)
+
+| # | Decision | Alternatives considered | Why |
+|---|---|---|---|
+| 01 | **Python 3.12 + FastAPI**, httpx, aio-pika, pydantic, managed with **uv** (workspace + lockfile) | Spring Boot, Node/Express | About 13 pods on one laptop: roughly 70 MB and under 1 s startup per Python pod, against roughly 300 MB and 5–15 s for Spring Boot. Fast startup also makes the pod-recovery and failover demos quick. Less boilerplate for a 3-day build; free OpenAPI `/docs`. The services are I/O-bound, so the GIL doesn't matter |
+| 02 | **3 microservices**: request, resource, matching | 2 services (request+matching) | Clear ownership (SRP); matching stays stateless and independently scalable; shows service-to-service calls |
+| 03 | **12 fixed partitions → 3 shards** | `mod 3`; consistent-hash ring | Rebalance-ready with little extra complexity (DDIA ch. 7) |
+| 04 | **SQLite per node on a PVC** | In-memory dict; Postgres/Redis per shard | Durable, zero-ops, gives a real local index. A managed DB would replicate itself and hide the part we're meant to build |
+| 05 | **Single-leader, synchronous, coordinator-driven replication** | Async; leaderless quorum | No acknowledged-write loss on failover; quorum needs ≥ 3 copies per shard |
+| 06 | **Optimistic concurrency** (versions, `If-Match`, 409) | Distributed locks; pessimistic locking | No lock leases or deadlocks; conflicts are rare and cheap to retry (DDIA ch. 8, "lost updates") |
+| 07 | **Heartbeat + fail-fast on error** | Heartbeat only | Failover within one request instead of a 6 s outage |
+| 08 | **Delta resync by digest, primary wins** | Full copy; Merkle trees | Simple, correct with tombstones; fast because PVCs keep old data |
+| 09 | **Saga with compensation** for reserve → assign | 2PC | No blocking coordinator for transactions; fits microservices |
+| 10 | **Priority + TTL-retry + DLQ** topology | Single plain queue | Urgent requests first; no busy-looping on scarcity; poison messages isolated |
+| 11 | **Reconciler + idempotent consumer** | Transactional outbox | Outbox needs an atomic write across storage and queue; the reconciler gives the same guarantee (eventual) |
+| 12 | **StatefulSet per shard**, Deployments for stateless services, Ingress gateway | Deployments everywhere | Storage needs a stable identity (`shard-1-0`) and its own volume |
+| 13 | **JSON logs + correlation ID + live dashboard** | Prometheus/Grafana stack | Highest demo value for the time; Prometheus `/metrics` is a stretch goal |
+| 14 | **Coordinator soft state** rebuilt from heartbeats | Persist the cluster map | Nothing to corrupt; restart is self-healing |
+| 15 | **Location is data, not placement**: the client sends lat/lon in the body; keys are sharded by hash of ID; matching scatter-gathers candidates and ranks by haversine distance | Geo-sharding (shard by region or geohash); global secondary index on (type, geohash cell) | A disaster concentrates load in one region, so geo-sharding would overload exactly one shard when it matters most. Hashing spreads the load evenly. Scatter-gather is cheap at our scale; a global geo index is how this would scale (DDIA ch. 7) |
+
+### Design patterns used (SADP)
+
+| Pattern | Where |
+|---|---|
+| API Gateway | K8s Ingress path routing |
+| Hexagonal / Ports and Adapters | Inside every service |
+| Repository | `StorageRepository` port; coordinator-client adapter |
+| Strategy | `MatchingStrategy` (`nearest`, `balanced`); `Partitioner` |
+| State | Request lifecycle transition table |
+| Publish–Subscribe / Observer | `erm.events` topic exchange |
+| Competing Consumers | Matching pods sharing `matching.q` |
+| Saga (compensating transaction) | Reserve → assign → (release) |
+| Optimistic Concurrency Control | Versions + `If-Match` / 409 |
+| Idempotent Consumer | Matching skips non-PENDING requests |
+| Retry with Backoff + Dead Letter Channel | `erm.retry`, `erm.dlx` |
+| Leader–Follower (primary–backup) | Shard replication |
+| Heartbeat | Node liveness |
+| Anti-entropy | Digest-based resync |
+| Reconciliation loop | PENDING sweeper (same idea as K8s controllers) |
+| Correlation Identifier | `X-Correlation-ID` through HTTP and AMQP |
+| Health Check | `/health` (liveness), `/ready` (readiness) probes |
+
+SOLID: SRP (one responsibility per service and module), OCP (new strategy = new class, no edits elsewhere), DIP (domain depends on ports, not on httpx/aio-pika).
+
+---
+
+## 8. Deployment, testing, demo
+
+### 8.1 Kubernetes (`k8s/`)
+- Namespace `erm`. ConfigMap (heartbeat timings, partitions, strategy, radius). Secret (RabbitMQ creds).
+- `rabbitmq` StatefulSet + Service (5672, 15672).
+- `coordinator` Deployment (1) + Service. `shard-{0,1,2}` StatefulSets (replicas 2, `volumeClaimTemplates`) + a headless Service each.
+- `request-`, `resource-`, `matching-service` Deployments (2 each) + ClusterIP Services + Ingress. Liveness/readiness probes on all.
+- Stretch: HPA on matching-service (needs the metrics-server addon).
+- `docker-compose.yml` with the same topology, for local development.
+
+### 8.2 Tests
+- **Unit**: partitioner distribution, state transitions, strategies, haversine, version/CAS rules.
+- **Integration** (compose): every Table 2 endpoint and status code; async create → ASSIGNED.
+- **Concurrency**: 50 simultaneous requests (quantity 1) vs total quantity 10 → exactly 10 ASSIGNED, 0 oversold.
+- **Failover**: kill the primary during a write loop → no acknowledged write lost, no client errors.
+- **Recovery**: restart the node → digests equal, node back as in-sync REPLICA.
+
+### 8.3 Demo scripts (`scripts/demo/`, one per item in spec §10)
+`01-create-get` · `02-register` · `03-match` · `04-distribution` (locate + per-shard counts) · `05-async-burst` (100 requests, watch the queue drain) · `06-kill-storage` · `07-recover-storage` · `08-k8s-pod-recovery` · `09-k8s-scale`. The dashboard stays open alongside.
+
+### 8.4 Plan and handover
+
+**Phase A: Claude + Sarthak, until handover (~1.5 days, about 11-17 morning)**
+1. uv workspace, `common` package (models, partitioner, logging, correlation ID).
+2. Storage node + coordinator: routing, replication, heartbeats, failover, resync, `/locate`, dashboard. Storage tests.
+3. request-, resource- and matching-service + RabbitMQ (Tier 1 topology: priority queue, DLQ). Saga with cancel compensation.
+4. docker-compose with everything running end to end; unit, integration and concurrency tests passing.
+5. K8s manifests (first version, smoke-tested on minikube).
+6. `HANDOVER.md` (what's done, how to run, what's left) + Commands section in CLAUDE.md filled in.
+
+**Phase B: friend, after handover**
+1. Harden the minikube deployment (Ingress addon, probes, scaling).
+2. Demo scripts for spec §10 (some written in Phase A).
+3. Tier 2 features, in this order: retry/backoff queue → wake-up on new supply → reconciler → `balanced` strategy → dashboard queue depths → HPA.
+4. Report/slides (DESIGN.md is the base).
+
+---
+
+## 9. Decisions log
+
+| Question | Decision |
+|---|---|
+| Language | Python 3.12 + FastAPI, uv (ADR-01) |
+| Resource capacity | Quantity on resource and request, no splitting (FR-17) |
+| Partitioning | 12 fixed partitions → 3 shards (ADR-03). Sarthak to confirm after reading DDIA ch. 7 |
+| Scope | Tier 1 now, Tier 2 progressively (§2.2, §8.4) |
+| Gateway | minikube Ingress addon |
+| Team | Friend takes over at ~1.5 days (§8.4) |
+| Friend and Python | Fine; friend works with Claude Code using CLAUDE.md + HANDOVER.md |
+| Freeze | Approved 2026-11-16 |
