@@ -159,6 +159,45 @@ class Router:
                 items.extend({"key": i["key"], "value": i["value"], "version": i["version"]} for i in shard_items)
         return {"items": items, "partial": bool(missing), "missing_shards": missing}
 
+    # ------------------------------------------------------------------ consistency check
+    async def verify(self) -> dict:
+        """Compare every node's digest with its shard primary's: are the copies identical?
+        Used by the chaos test and the dashboard to *prove* replica convergence, not just claim it.
+        A node that is still syncing (or receiving an in-flight write) may briefly differ."""
+
+        async def digest(node: NodeInfo):
+            try:
+                r = await self.http.get(f"{node.url}/internal/digest", timeout=10.0)
+                r.raise_for_status()
+                return r.json()["digest"]
+            except httpx.HTTPError:
+                return None
+
+        shards = []
+        for shard_id in range(self.state.num_shards):
+            primary = self.state.primary_node(shard_id)
+            nodes = [n for n in self.state.shard_nodes(shard_id) if n.usable()]
+            digests = await asyncio.gather(*(digest(n) for n in nodes))
+            by_id = dict(zip([n.node_id for n in nodes], digests))
+            reference = by_id.get(primary.node_id) if primary else None
+            report = []
+            for node in nodes:
+                d = by_id[node.node_id]
+                if d is None or reference is None:
+                    report.append({"node_id": node.node_id, "sync": node.sync, "identical": None})
+                    continue
+                differing = sum(1 for k in reference.keys() | d.keys() if reference.get(k) != d.get(k))
+                report.append({"node_id": node.node_id, "sync": node.sync, "identical": differing == 0,
+                               "differing_keys": differing})
+            shards.append({
+                "shard_id": shard_id,
+                "primary": primary.node_id if primary else None,
+                "keys": len(reference) if reference is not None else None,
+                "nodes": report,
+                "consistent": reference is not None and all(n["identical"] for n in report),
+            })
+        return {"consistent": all(s["consistent"] for s in shards), "shards": shards}
+
     # ------------------------------------------------------------------ resync (repair loop)
     async def repair_once(self) -> None:
         for node in self.state.nodes_needing_sync():

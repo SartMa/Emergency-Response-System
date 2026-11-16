@@ -125,6 +125,12 @@ async def cluster():
     return view
 
 
+@app.get("/internal/verify")
+async def verify():
+    """Are primary and replica copies byte-for-byte identical? (digest comparison per shard)"""
+    return await router.verify()
+
+
 @app.get("/internal/locate/{key}")
 async def locate(key: str):
     """FR-22: where does this key live? (for the data-distribution demo)"""

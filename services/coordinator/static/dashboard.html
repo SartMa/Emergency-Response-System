@@ -93,12 +93,24 @@ function nodeHtml(n) {
   </div>`;
 }
 
+let verify = null;  // latest /internal/verify result: are replicas identical to primaries?
+
+function consistencyBadge(shardId) {
+  if (!verify) return '';
+  const s = verify.shards.find(x => x.shard_id === shardId);
+  if (!s) return '';
+  if (s.consistent) return `<span class="b ok" title="digests of all copies match">copies identical</span>`;
+  const n = s.nodes.filter(x => x.identical === false).map(x => `${x.node_id}: ${x.differing_keys} keys`).join(', ');
+  return `<span class="b warn" title="${esc(n)}">catching up</span>`;
+}
+
 function render(c) {
   document.getElementById('shards').innerHTML = c.shards.map(s => `
     <div class="card ${s.available ? '' : 'down'}">
       <div class="shard-title">
         <span><span class="swatch" style="background:${SHARD_COLORS[s.shard_id]}"></span>Shard ${s.shard_id}</span>
-        <span class="b ${s.available ? 'ok' : 'bad'}">${s.available ? 'AVAILABLE' : 'UNAVAILABLE'}</span>
+        <span class="badges">${consistencyBadge(s.shard_id)}
+          <span class="b ${s.available ? 'ok' : 'bad'}">${s.available ? 'AVAILABLE' : 'UNAVAILABLE'}</span></span>
       </div>
       ${s.nodes.length ? s.nodes.map(nodeHtml).join('') : '<div class="muted">no nodes registered</div>'}
     </div>`).join('');
@@ -126,7 +138,12 @@ async function poll() {
   }
   setTimeout(poll, 1000);
 }
+async function pollVerify() {
+  try { verify = await (await fetch('/internal/verify', { cache: 'no-store' })).json(); } catch (e) { verify = null; }
+  setTimeout(pollVerify, 3000);
+}
 poll();
+pollVerify();
 </script>
 </body>
 </html>

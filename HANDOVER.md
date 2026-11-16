@@ -1,6 +1,6 @@
 # Handover: Phase A → Phase B
 
-Written 2026-11-16 at the end of Phase A. Deadline **2026-11-18**.
+Written 2026-11-16 at the end of Phase A. Deadline **2026-11-20** (moved from 11-18).
 Read this first, then `DESIGN.md` (the why) and `CLAUDE.md` (the rules + commands).
 
 ## 1. Where things stand
@@ -53,6 +53,7 @@ Keep `http://localhost:8090/dashboard` visible next to the terminal the whole ti
 | 6 | `06-storage-failure.sh` | Storage failure + node recovery | before/during/after; event log: failover, then "resynced (N keys copied)" |
 | 7 | `08-k8s-pod-recovery.sh` | K8s recovery | 40/40 requests succeed while a pod is deleted; coordinator rebuilds itself |
 | 8 | `09-k8s-scale.sh` | K8s scaling | 4 pods share the queue roughly evenly |
+| 9 | `make chaos` (beyond the spec) | Proof under repeated failure | 2 min of random kills, then 6 checks print PASS; watch "copies identical" on the dashboard return after each kill |
 
 Demo 08 restarts the coordinator, so restart `make k8s-dashboard` after it.
 For a longer "during" window in demo 06 on Kubernetes, scale the StatefulSet instead of deleting a pod:

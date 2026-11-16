@@ -2,7 +2,7 @@
 SERVICES := coordinator storage_node request_service resource_service matching_service
 K := kubectl -n erm
 
-.PHONY: help test unit up down logs k8s-start k8s-build k8s-deploy k8s-status k8s-gateway k8s-dashboard k8s-rabbitmq k8s-delete
+.PHONY: help test unit chaos up down logs k8s-start k8s-build k8s-deploy k8s-status k8s-gateway k8s-dashboard k8s-rabbitmq k8s-delete
 
 help:            ## list targets
 	@grep -E '^[a-z0-9-]+:.*##' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-15s %s\n", $$1, $$2}'
@@ -22,6 +22,9 @@ unit:            ## unit tests (no Docker needed)
 
 test:            ## unit + integration tests (needs `make up` or k8s port-forwards)
 	uv run pytest -q
+
+chaos:           ## 2 min of traffic + random storage-node kills, then checks 6 guarantees (MODE=compose for local)
+	uv run python scripts/chaos.py --mode $${MODE:-k8s} --report chaos-report.json
 
 # ---------------------------------------------------------------- Kubernetes (minikube)
 k8s-start:       ## start minikube with enough resources + ingress addon

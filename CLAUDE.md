@@ -1,7 +1,7 @@
 # CLAUDE.md
 
 Semester 7 Cloud Computing project: **Distributed Emergency Resource Matching System**.
-Spec: `Emergency Response Matching-1.pdf`. Deadline: **2026-11-18**.
+Spec: `Emergency Response Matching-1.pdf`. Deadline: **2026-11-20**.
 
 ## Source of truth
 - **`DESIGN.md`** holds the requirements, architecture and ADRs (§10 lists post-freeze implementation notes). Read it before changing anything.

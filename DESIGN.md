@@ -2,7 +2,7 @@
 
 > **Status: FROZEN (2026-11-16).** From now on, any change needs an ADR update (§7) and team approval.
 >
-> Spec: `Emergency Response Matching-1.pdf` · Deadline: **2026-11-18**
+> Spec: `Emergency Response Matching-1.pdf` · Deadline: **2026-11-20**
 
 ---
 
@@ -341,4 +341,5 @@ These are clarifications made while building. None of them changes an ADR's deci
 | N5 | **One Dockerfile, `SERVICE` build arg**, one image per service. On minikube, images are built on the host and loaded with `minikube image load` | §8.1 didn't specify | The existing minikube profile uses containerd, where `minikube docker-env` doesn't work |
 | N6 | **Local gateway**: docker-compose runs nginx on :8080 with the same path routing as the Ingress; the coordinator dashboard is on :8090 | §8.1 | Same client experience locally and on Kubernetes |
 | N7 | **Measured performance.** Create request: p50 38 ms, p95 47 ms (sequential, minikube, through the Ingress). Under a 20-way parallel burst against *one* resource, p95 rises to about 500 ms | NFR-6 | Updates to a single hot record are serialised by design (that's what prevents overselling). Load spread over several resources scales with matching pods (demo 9) |
-| N8 | **ADR-16 added** (Sarthak's proposal): exponential backoff with jitter on storage calls, `Retry-After` on 503 | new | Verified on minikube: coordinator pod deleted during 30 requests → 28 succeeded (before: every request in the window failed with 503) |
+| N8 | **ADR-16 added** (Sarthak's proposal): exponential backoff with jitter on storage calls, `Retry-After` on 503 | new | Verified on minikube: coordinator pod deleted during 30 requests → 28 succeeded, 1 × 504 (in flight when the pod died), 1 × 503 after retries ran out. No before/after comparison was measured |
+| N9 | **Chaos test** (`scripts/chaos.py`, `make chaos`): client traffic + random hard kills of storage pods, then 6 automatic checks (durability, durable cancels, no over-allocation, depots ↔ requests agree, no stuck requests, replicas identical). New coordinator endpoint `GET /internal/verify` compares every replica's digest with its primary's; the dashboard shows it per shard as "copies identical" | new (beyond the spec) | Turns our guarantees into evidence. On minikube 2026-11-17: normal run 16 kills (10 primaries) in 2 min, 5,658/5,658 writes accepted, all 6 checks pass. `--aggressive` run 27 kills (19 primaries) in 93 s, 4,072/4,072 accepted, all 6 pass |
