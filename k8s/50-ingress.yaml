@@ -1,0 +1,15 @@
+# API Gateway pattern: one public entry point, routed by path (needs `minikube addons enable ingress`).
+# /internal/* is deliberately not routed: internal APIs stay inside the cluster (NFR-12).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: erm-gateway
+  namespace: erm
+spec:
+  ingressClassName: nginx
+  rules:
+    - http:
+        paths:
+          - { path: /requests,  pathType: Prefix, backend: { service: { name: request-service,  port: { number: 8000 } } } }
+          - { path: /resources, pathType: Prefix, backend: { service: { name: resource-service, port: { number: 8000 } } } }
+          - { path: /match,     pathType: Prefix, backend: { service: { name: matching-service, port: { number: 8000 } } } }

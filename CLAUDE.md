@@ -4,7 +4,8 @@ Semester 7 Cloud Computing project: **Distributed Emergency Resource Matching Sy
 Spec: `Emergency Response Matching-1.pdf`. Deadline: **2026-11-18**.
 
 ## Source of truth
-- **`DESIGN.md`** holds the requirements, architecture and ADRs. Read it before changing anything.
+- **`DESIGN.md`** holds the requirements, architecture and ADRs (§10 lists post-freeze implementation notes). Read it before changing anything.
+- **`HANDOVER.md`** holds the current status, demo runbook and the remaining (Phase B) work.
 - Design status: **FROZEN** (2026-11-16).
 - After the freeze, don't deviate from DESIGN.md silently. If something has to change, ask the user first, then update the relevant ADR.
 - The students must defend every choice in a viva. Keep code readable. Comments explain *why* and point to the decision (e.g. `# ADR-06: optimistic concurrency`). Avoid clever code.
@@ -14,16 +15,17 @@ Python 3.12, FastAPI, uvicorn, httpx (async), aio-pika, pydantic v2, SQLite (std
 Dependencies are managed with **uv** (one project at the repo root + `uv.lock`); use `uv add` / `uv run`, never pip. Docker images install with uv too.
 Docker (`python:3.12-slim`), docker-compose for local development, minikube for Kubernetes (namespace `erm`).
 
-## Layout (planned)
+## Layout
 ```
-services/common/          shared models, partitioner, logging, correlation-id, AMQP + HTTP helpers
-services/storage_node/    SQLite KV with versions, digest, sync
-services/coordinator/     routing, replication, heartbeats, failover, resync, /dashboard
-services/request_service/ requests API, state machine, publisher, reconciler
-services/resource_service/ resources API, reserve/release (If-Match), cancel-event consumer
-services/matching_service/ consumer, strategies, saga, POST /match/{id}
-k8s/                      manifests
-scripts/demo/             one script per spec §10 demo item
+services/common/           shared: config, JSON logging + correlation ID, errors, partitioner, geo, AMQP, storage client
+services/storage_node/     store.py (SQLite KV with versions, tombstones, digest) + main.py (API, heartbeat, /internal/sync)
+services/coordinator/      cluster.py (PURE failover/election rules) + router.py (routing, replication, resync) + main.py + static/dashboard.html
+services/request_service/  domain.py (state machine) -> service.py (CAS updates, publishing) -> main.py (API)
+services/resource_service/ domain.py (quantity, reserve/release) -> service.py -> main.py (API + cancel consumer)
+services/matching_service/ strategies.py (Strategy pattern) + saga.py (reserve -> assign -> compensate) + clients.py + main.py
+k8s/                       manifests (apply in filename order)
+deploy/gateway/nginx.conf  local stand-in for the Ingress
+scripts/demo/              demo scripts, one per spec §10 item (MODE=k8s|compose)
 tests/unit, tests/integration
 ```
 
@@ -38,4 +40,16 @@ tests/unit, tests/integration
 - Error body: `{"error": {"code": "...", "message": "...", "correlation_id": "..."}}`. Codes: 400 invalid, 404 missing, 409 conflict / invalid transition, 503 storage or broker unavailable.
 
 ## Commands
-Fill these in during implementation (build, compose up, minikube deploy, tests, demo).
+`make help` lists everything. The common ones:
+- `make unit`: unit tests, no Docker needed
+- `make up` / `make down`: local stack (API :8080, dashboard http://localhost:8090/dashboard, RabbitMQ UI :15672)
+- `make test`: unit + integration tests (needs the stack running, locally or via k8s port-forwards)
+- `make k8s-start`, `make k8s-build`, `make k8s-deploy`: minikube from scratch
+- `make k8s-gateway` and `make k8s-dashboard`: port-forwards to :8080 and :8090 (keep them running)
+- `MODE=k8s ./scripts/demo/06-storage-failure.sh` (or `MODE=compose`): demos; `NO_PAUSE=1` skips the prompts
+
+Gotchas:
+- After changing code for Kubernetes: `make k8s-build`, then `kubectl -n erm rollout restart deployment/<name>` (or `statefulset/shard-N`).
+- The coordinator must stay a single process (its cluster map is in memory). Never add uvicorn workers or replicas to it.
+- `kubectl logs -l ...` shows only 10 lines per pod unless you pass `--tail=-1`.
+- Port 8081 is used by another app on Sarthak's machine, which is why the dashboard uses 8090.

@@ -324,3 +324,19 @@ SOLID: SRP (one responsibility per service and module), OCP (new strategy = new 
 | Team | Friend takes over at ~1.5 days (§8.4) |
 | Friend and Python | Fine; friend works with Claude Code using CLAUDE.md + HANDOVER.md |
 | Freeze | Approved 2026-11-16 |
+
+---
+
+## 10. Implementation notes (post-freeze, 2026-11-16)
+
+These are clarifications made while building. None of them changes an ADR's decision, but each is listed so it can be defended.
+
+| # | What | Where it differs from the text above | Why |
+|---|---|---|---|
+| N1 | **Reserve retries close to the data.** matching-service calls `reserve` *without* `If-Match`; resource-service does read → check quantity → compare-and-set write, re-reading on conflict (up to 20 times, with jitter). `If-Match` is still accepted on `reserve` and on both public status endpoints | §6.2 step 5 said matching sends `If-Match` and re-queries on 409 | The guarantee is identical (the storage CAS refuses stale writes), but a retry costs one GET + PUT instead of a whole scatter-gather query. Verified: 50 concurrent requests vs 10 units → exactly 10 assigned, 64 conflicts resolved |
+| N2 | **Transient errors are requeued.** If a consumer gets `503` (e.g. a shard failing over), it waits 1 s and requeues the message. Only real bugs go to the DLQ | §6.2 said "unexpected exception → DLQ" | A failover is expected and lasts under a second; dead-lettering those messages would lose work |
+| N3 | **Election safety rule.** A shard without a primary elects the live node with the highest `version_sum`, *unless* a DEAD node of that shard reported a higher one. Then it stays unavailable until that node returns | §5.6 only described the coordinator-restart case | Prevents a STALE replica from silently losing acknowledged writes in a double failure (consistency over availability) |
+| N4 | **`balanced` strategy is already implemented** (Tier 2 item done early) | §2.2 marked it Tier 2 | 10 lines of code; unit-tested |
+| N5 | **One Dockerfile, `SERVICE` build arg**, one image per service. On minikube, images are built on the host and loaded with `minikube image load` | §8.1 didn't specify | The existing minikube profile uses containerd, where `minikube docker-env` doesn't work |
+| N6 | **Local gateway**: docker-compose runs nginx on :8080 with the same path routing as the Ingress; the coordinator dashboard is on :8090 | §8.1 | Same client experience locally and on Kubernetes |
+| N7 | **Measured performance.** Create request: p50 38 ms, p95 47 ms (sequential, minikube, through the Ingress). Under a 20-way parallel burst against *one* resource, p95 rises to about 500 ms | NFR-6 | Updates to a single hot record are serialised by design (that's what prevents overselling). Load spread over several resources scales with matching pods (demo 9) |

@@ -6,6 +6,7 @@ single emergency request through request-service -> RabbitMQ -> matching-service
 
 import contextvars
 import json
+import os
 import logging
 import sys
 import time
@@ -47,7 +48,9 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(entry, default=str)
 
 
-def setup_logging(service: str, node: str = "-", level: str = "INFO") -> logging.Logger:
+def setup_logging(service: str, node: str | None = None, level: str = "INFO") -> logging.Logger:
+    # Default node name = container hostname (the pod name in Kubernetes), e.g. matching-service-7c9f-x2k.
+    node = node or os.environ.get("HOSTNAME", "-")
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(JsonFormatter(service, node))
     root = logging.getLogger()
