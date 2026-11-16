@@ -130,3 +130,37 @@ def test_balanced_prefers_less_loaded_provider():
     fresh = ResourceView("b", "b", 0.12, 0.0, quantity_remaining=10, quantity_total=10)       # 13 km, unused
     assert NearestStrategy().rank(req, [nearly_empty, fresh], 50)[0].resource.id == "a"
     assert BalancedStrategy().rank(req, [nearly_empty, fresh], 50)[0].resource.id == "b"
+
+
+# ---------------------------------------------------------------- retry backoff (ADR-16)
+def test_backoff_grows_exponentially_and_is_capped():
+    from services.common.retry import backoff_delay
+
+    highest = [backoff_delay(n, base=0.2, cap=2.0, rand=lambda: 1.0) for n in range(1, 7)]
+    assert highest == [0.2, 0.4, 0.8, 1.6, 2.0, 2.0]
+    lowest = [backoff_delay(n, base=0.2, cap=2.0, rand=lambda: 0.0) for n in range(1, 4)]
+    assert lowest == [0.1, 0.2, 0.4]  # jitter never goes below half: no near-zero retries
+
+
+async def test_retry_only_on_unavailable():
+    from services.common.errors import Unavailable
+    from services.common.retry import retry_unavailable
+
+    calls = {"n": 0}
+
+    async def flaky():
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise Unavailable("shard failing over")
+        return "ok"
+
+    assert await retry_unavailable(flaky, "test") == "ok" and calls["n"] == 3
+
+    async def conflict():
+        calls["n"] += 1
+        raise Conflict("not an outage")
+
+    calls["n"] = 0
+    with pytest.raises(Conflict):
+        await retry_unavailable(conflict, "test")
+    assert calls["n"] == 1  # answered, not retried

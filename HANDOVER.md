@@ -17,7 +17,7 @@ Read this first, then `DESIGN.md` (the why) and `CLAUDE.md` (the rules + command
 | Docker images + docker-compose | done | `make up` |
 | Kubernetes: Deployments, StatefulSets, Services, Ingress, probes, ConfigMap/Secret | done | `make k8s-deploy`, all 14 pods ready |
 | K8s pod failure + recovery, scaling | done | demos 08, 09 |
-| Tests: normal + failure | done | 26 tests pass on compose; the 7 integration tests also pass on minikube |
+| Tests: normal + failure | done | 28 tests pass (21 unit, 7 integration); the 7 integration tests also pass on minikube |
 
 **Our extras (Tier 1), all done:** geo matching with quantity, no over-allocation under concurrency (optimistic concurrency), saga with compensation on cancel, priority queue by urgency, DLQ, live dashboard, `/internal/locate`, status history, correlation IDs in JSON logs, coordinator self-rebuild after restart, and the `balanced` strategy (from Tier 2).
 
@@ -26,7 +26,7 @@ Read this first, then `DESIGN.md` (the why) and `CLAUDE.md` (the rules + command
 ```bash
 # local
 make up                     # API http://localhost:8080, dashboard http://localhost:8090/dashboard
-make test                   # 26 tests
+make test                   # 28 tests
 make down                   # stops and wipes volumes
 
 # kubernetes (minikube is already set up on Sarthak's laptop)
@@ -58,6 +58,15 @@ Demo 08 restarts the coordinator, so restart `make k8s-dashboard` after it.
 For a longer "during" window in demo 06 on Kubernetes, scale the StatefulSet instead of deleting a pod:
 `kubectl -n erm scale sts/shard-0 --replicas=1` (removes `shard-0-1`), then `--replicas=2`.
 
+### If the API stops answering on minikube
+Symptom: requests through :8080 hang, or pods can't reach `coordinator` / `request-service` by name, right after pods were restarted. Cause seen on 2026-11-16: minikube's own system pods (kube-proxy, ingress controller) had stale API tokens (`Unauthorized` in their logs), so they kept routing to old pod IPs. It is not an application bug. Fix:
+```bash
+kubectl -n kube-system delete pod -l k8s-app=kube-proxy
+kubectl -n ingress-nginx rollout restart deployment/ingress-nginx-controller
+# then restart `make k8s-gateway` and `make k8s-dashboard`
+```
+Before the real demo, do a fresh `minikube stop && minikube start`, and don't let the laptop sleep in between.
+
 ## 4. What's left (Phase B)
 
 In priority order. Each item lists where to change the code.
@@ -74,7 +83,7 @@ In priority order. Each item lists where to change the code.
 
 ## 5. Known limitations (say them before the examiner does)
 
-- **Single coordinator**: if its pod dies, storage returns 503 for about 5–7 s until Kubernetes restarts it and nodes re-register. Required by the spec (1 coordinator). Mitigated by soft state; a fix would need consensus (DDIA ch. 10).
+- **Single coordinator**: if its pod dies, storage is unavailable for about 5–7 s until Kubernetes restarts it and nodes re-register. Services ride most of that out with exponential backoff (ADR-16); a few requests may still get 503 with `Retry-After`. Required by the spec (1 coordinator). Mitigated by soft state; a fix would need consensus (DDIA ch. 10).
 - **Hot resource**: many requests for the same resource are processed one after another (correct but slower: about 30 per second). Spread-out load scales with pods.
 - **Events lost if RabbitMQ is down**: requests are still stored (201, `queued_for_matching: false`) but stay PENDING until someone calls `POST /match/{id}`, or until the Tier 2 reconciler exists.
 - **Degraded mode**: if a replica is down, writes are acknowledged with one copy. If the primary then also dies before the replica resyncs, the shard becomes unavailable (it does not lose data, it waits).
@@ -92,4 +101,5 @@ In priority order. Each item lists where to change the code.
 - **At-least-once delivery: what if a message is processed twice?** Matching skips requests that aren't PENDING/UNMATCHED, and reserve is idempotent per `request_id`.
 - **Why not shard by location?** A disaster is local, so one shard would take all the load (ADR-15).
 - **Why StatefulSets for storage?** Stable names (`shard-1-0`), stable DNS, and a volume that survives restarts, which is what makes delta resync possible.
+- **What stops a retry storm during failover?** Callers back off exponentially with jitter (0.2 s doubling to 2 s), and 503s carry `Retry-After` (ADR-16).
 - **How is failure detected?** Heartbeat every 2 s (SUSPECT after 4 s, DEAD after 6 s), and immediately when a request to the primary fails (fast failover).

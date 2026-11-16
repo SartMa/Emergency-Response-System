@@ -50,6 +50,13 @@ class Unavailable(AppError):
     code = "UNAVAILABLE"
 
 
+class GatewayTimeout(AppError):
+    """A dependency accepted the request but did not answer in time; the outcome is unknown."""
+
+    status = 504
+    code = "TIMEOUT"
+
+
 def error_body(code: str, message: str, details: dict | None = None) -> dict:
     body = {"code": code, "message": message, "correlation_id": correlation_id.get()}
     if details:
@@ -60,7 +67,10 @@ def error_body(code: str, message: str, details: dict | None = None) -> dict:
 def install_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(AppError)
     async def _app_error(_: Request, exc: AppError):
-        return JSONResponse(error_body(exc.code, exc.message, exc.details), status_code=exc.status)
+        # 503 means "temporarily unavailable": tell the client when to come back, so that
+        # well-behaved clients back off instead of hammering a recovering system (ADR-16).
+        headers = {"Retry-After": "2"} if exc.status == 503 else None
+        return JSONResponse(error_body(exc.code, exc.message, exc.details), status_code=exc.status, headers=headers)
 
     @app.exception_handler(RequestValidationError)
     async def _validation(_: Request, exc: RequestValidationError):
@@ -86,7 +96,8 @@ def raise_for_error_response(response) -> None:
         details = err.get("details")
     except Exception:
         code, message, details = None, response.text[:200], None
-    by_status = {400: BadRequest, 404: NotFound, 409: Conflict, 412: VersionConflict, 503: Unavailable}
+    by_status = {400: BadRequest, 404: NotFound, 409: Conflict, 412: VersionConflict, 503: Unavailable,
+                 504: GatewayTimeout}
     cls = by_status.get(response.status_code, AppError)
     if response.status_code == 409 and code == "VERSION_CONFLICT":
         cls = VersionConflict

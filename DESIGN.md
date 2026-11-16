@@ -247,6 +247,7 @@ The cluster map is **rebuilt from heartbeats**: nodes re-register within about 2
 | 13 | **JSON logs + correlation ID + live dashboard** | Prometheus/Grafana stack | Highest demo value for the time; Prometheus `/metrics` is a stretch goal |
 | 14 | **Coordinator soft state** rebuilt from heartbeats | Persist the cluster map | Nothing to corrupt; restart is self-healing |
 | 15 | **Location is data, not placement**: the client sends lat/lon in the body; keys are sharded by hash of ID; matching scatter-gathers candidates and ranks by haversine distance | Geo-sharding (shard by region or geohash); global secondary index on (type, geohash cell) | A disaster concentrates load in one region, so geo-sharding would overload exactly one shard when it matters most. Hashing spreads the load evenly. Scatter-gather is cheap at our scale; a global geo index is how this would scale (DDIA ch. 7) |
+| 16 | **Retry with exponential backoff + jitter** when storage is unavailable (0.2 s doubling to a 2 s cap, 5 retries); `Retry-After: 2` header on every 503 for outside clients | Fail immediately; retry at a fixed interval | Immediate or fixed-interval retries from every caller hit a recovering component at the same moments (retry storm). Doubling the wait reduces load while it recovers; jitter stops callers retrying in lockstep. Only "not applied" errors (503, connect refused) are retried; a timeout mid-request returns 504 because the outcome is unknown |
 
 ### Design patterns used (SADP)
 
@@ -262,7 +263,7 @@ The cluster map is **rebuilt from heartbeats**: nodes re-register within about 2
 | Saga (compensating transaction) | Reserve → assign → (release) |
 | Optimistic Concurrency Control | Versions + `If-Match` / 409 |
 | Idempotent Consumer | Matching skips non-PENDING requests |
-| Retry with Backoff + Dead Letter Channel | `erm.retry`, `erm.dlx` |
+| Retry with Backoff + Dead Letter Channel | `common/retry.py` (storage calls, ADR-16), `erm.dlx`; `erm.retry` queue is Tier 2 |
 | Leader–Follower (primary–backup) | Shard replication |
 | Heartbeat | Node liveness |
 | Anti-entropy | Digest-based resync |
@@ -340,3 +341,4 @@ These are clarifications made while building. None of them changes an ADR's deci
 | N5 | **One Dockerfile, `SERVICE` build arg**, one image per service. On minikube, images are built on the host and loaded with `minikube image load` | §8.1 didn't specify | The existing minikube profile uses containerd, where `minikube docker-env` doesn't work |
 | N6 | **Local gateway**: docker-compose runs nginx on :8080 with the same path routing as the Ingress; the coordinator dashboard is on :8090 | §8.1 | Same client experience locally and on Kubernetes |
 | N7 | **Measured performance.** Create request: p50 38 ms, p95 47 ms (sequential, minikube, through the Ingress). Under a 20-way parallel burst against *one* resource, p95 rises to about 500 ms | NFR-6 | Updates to a single hot record are serialised by design (that's what prevents overselling). Load spread over several resources scales with matching pods (demo 9) |
+| N8 | **ADR-16 added** (Sarthak's proposal): exponential backoff with jitter on storage calls, `Retry-After` on 503 | new | Verified on minikube: coordinator pod deleted during 30 requests → 28 succeeded (before: every request in the window failed with 503) |
