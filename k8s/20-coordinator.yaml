@@ -26,6 +26,10 @@ spec:
           image: erm/coordinator:dev
           imagePullPolicy: Never
           envFrom: [{ configMapRef: { name: erm-config } }]
+          env:   # queue depths on the dashboard, read from RabbitMQ's management API
+            - { name: RABBITMQ_MGMT_URL, value: "http://rabbitmq:15672" }
+            - { name: RABBITMQ_USER, valueFrom: { secretKeyRef: { name: rabbitmq-credentials, key: username } } }
+            - { name: RABBITMQ_PASS, valueFrom: { secretKeyRef: { name: rabbitmq-credentials, key: password } } }
           ports: [{ containerPort: 8000 }]
           livenessProbe: { httpGet: { path: /health, port: 8000 }, periodSeconds: 10 }
           readinessProbe: { httpGet: { path: /ready, port: 8000 }, periodSeconds: 5 }

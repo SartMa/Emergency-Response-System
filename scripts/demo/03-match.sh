@@ -25,12 +25,25 @@ call GET "/resources/$tanker" | body_of | jq '{name, status, availability, alloc
 pause
 
 step "POST /match/{id}: on-demand matching, same saga, synchronous answer"
-far=$(new_request shelter 10.0 10.0)   # nowhere near any shelter
+# A fresh random spot in the South Pacific on every run, so shelters left by earlier runs
+# can't be nearby (the demo stays repeatable without wiping data).
+lat=$(awk -v s="$RANDOM" 'BEGIN { srand(s); printf "%.3f", -55 + rand() * 20 }')
+lon=$(awk -v s="$RANDOM" 'BEGIN { srand(s); printf "%.3f", -150 + rand() * 40 }')
+far=$(new_request shelter "$lat" "$lon")   # nowhere near any shelter
 sleep 1
 out=$(call POST "/match/$far")
 echo "$out" | body_of | jq -c .error
-note "HTTP $(echo "$out" | status_of): NO_RESOURCE_AVAILABLE (nothing within 50 km)"
-hall=$(new_resource shelter "School hall" 10.01 10.01 50)
-out=$(call POST "/match/$far")
-echo "$out" | body_of | jq .
-note "HTTP $(echo "$out" | status_of): matched after the shelter was registered"
+note "HTTP $(echo "$out" | status_of): $(echo "$out" | body_of | jq -r .error.code) (expected NO_RESOURCE_AVAILABLE: nothing within 50 km)"
+note "Meanwhile the request is UNMATCHED and retried in the background (2, 4, 8, 16, 32 s)"
+pause
+
+step "Register a shelter nearby: nobody calls /match, the waiting request is woken up automatically"
+hall=$(new_resource shelter "School hall" "$(echo "$lat + 0.01" | awk '{print $1 + $3}')" "$lon" 50)
+for _ in $(seq 1 20); do
+  st=$(call GET "/requests/$far" | body_of | jq -r .status)
+  [ "$st" = ASSIGNED ] && break
+  sleep 0.5
+done
+call GET "/requests/$far" | body_of | jq '{status, assignment, match_attempts}'
+note "resource.registered event -> matching-service woke up UNMATCHED shelter requests within 50 km"
+note "POST /match now answers $(call POST "/match/$far" | status_of) NOT_MATCHABLE: it is already assigned"

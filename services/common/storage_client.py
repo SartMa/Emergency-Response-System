@@ -12,7 +12,7 @@ from dataclasses import dataclass
 import httpx
 
 from services.common.config import COORDINATOR_URL
-from services.common.errors import GatewayTimeout, NotFound, Unavailable, raise_for_error_response
+from services.common.errors import GatewayTimeout, NotFound, Unavailable, VersionConflict, raise_for_error_response
 from services.common.http import make_client
 from services.common.retry import retry_unavailable
 
@@ -35,8 +35,9 @@ class StorageClient:
         async def once() -> httpx.Response:
             try:
                 response = await self._http.request(method, url, **kwargs)
-            except httpx.ConnectError as exc:
-                # Could not even connect: the request was never sent, so retrying is safe.
+            except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+                # Could not even connect (refused, or no answer to the connection attempt):
+                # the request was never sent, so retrying is safe.
                 raise Unavailable(f"Coordinator unreachable: {exc.__class__.__name__}", code="COORDINATOR_UNAVAILABLE")
             except httpx.TransportError as exc:
                 # Sent, but no answer (timeout / connection dropped): we don't know whether the
@@ -67,6 +68,21 @@ class StorageClient:
             )
         ).json()
         return body["version"]
+
+    async def create(self, key: str, value: dict) -> int:
+        """Store a NEW key (expected_version=0). Returns the version.
+
+        A create retried after an unknown outcome (timeout, then a retry with backoff) can find
+        its own earlier attempt already stored and get 409. Keys here are fresh UUIDs, so if the
+        stored value is exactly ours, the create did succeed. A chaos run showed this case
+        answered as a false 409 to the client."""
+        try:
+            return await self.put(key, value, expected_version=0)
+        except VersionConflict:
+            existing = await self.get_or_none(key)
+            if existing is not None and existing.value == value:
+                return existing.version
+            raise
 
     async def query(self, kind: str, type_: str | None = None, status: str | None = None) -> tuple[list[Versioned], bool]:
         """Scatter-gather over all shards (DDIA ch. 7, local secondary indexes).

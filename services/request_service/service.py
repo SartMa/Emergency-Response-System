@@ -7,8 +7,10 @@ either re-read and retry (when the caller did not pin a version) or report the c
 """
 
 import logging
+from datetime import datetime, timezone
 
 from services.common.amqp import COMMANDS_EXCHANGE, EVENTS_EXCHANGE, MATCH_ROUTING_KEY, AmqpClient
+from services.common.config import env_float
 from services.common.errors import Unavailable, VersionConflict
 from services.common.models import request_key
 from services.common.storage_client import StorageClient
@@ -18,19 +20,46 @@ from services.request_service.domain import Assignment, CreateRequest, Emergency
 log = logging.getLogger("request-service")
 
 MAX_CAS_RETRIES = 5
+RECONCILE_MIN_AGE_S = env_float("RECONCILE_MIN_AGE_S", 30.0)
+RECONCILE_RESEND_EVERY_S = env_float("RECONCILE_RESEND_EVERY_S", 60.0)
 
 
 class RequestService:
     def __init__(self, storage: StorageClient, broker: AmqpClient):
         self.storage = storage
         self.broker = broker
+        # request id -> when this pod last re-sent it (per pod; another pod may also re-send,
+        # which only produces a harmless duplicate)
+        self._resent: dict[str, datetime] = {}
+
+    async def reconcile_pending(self) -> int:
+        """Reconciliation loop body (DESIGN.md §6.2, same idea as a Kubernetes controller):
+        compare desired state (every PENDING request has a match command in flight) with actual
+        state, and repair the difference by re-sending. Returns how many were re-sent."""
+        if not self.broker.is_ready:
+            return 0  # nothing we could do this round anyway
+        items, _ = await self.storage.query("req", None, RequestStatus.PENDING)
+        reqs = [EmergencyRequest.model_validate(i.value) for i in items]
+        now = datetime.now(timezone.utc)
+        stale = domain.stale_pending(reqs, now, RECONCILE_MIN_AGE_S, self._resent, RECONCILE_RESEND_EVERY_S)
+        resent = 0
+        for req in stale:
+            if await self.publish_match(req):
+                self._resent[req.id] = now
+                resent += 1
+        # forget entries that can no longer matter, so the dict does not grow forever
+        self._resent = {k: t for k, t in self._resent.items()
+                        if (now - t).total_seconds() < 2 * RECONCILE_RESEND_EVERY_S}
+        if resent:
+            log.warning(f"reconciler: re-sent {resent} request(s) stuck in PENDING for over {RECONCILE_MIN_AGE_S:.0f}s")
+        return resent
 
     async def create(self, body: CreateRequest) -> tuple[EmergencyRequest, int, bool]:
         """Spec §7 steps 1-3: store the request, then publish it for asynchronous matching.
         Returns (request, version, queued). If RabbitMQ is down the request is still stored and
         the client still gets 201 with queued=false (NFR-11)."""
         req = domain.new_request(body)
-        version = await self.storage.put(request_key(req.id), req.model_dump(mode="json"), expected_version=0)
+        version = await self.storage.create(request_key(req.id), req.model_dump(mode="json"))
         queued = await self.publish_match(req)
         return req, version, queued
 

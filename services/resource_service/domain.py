@@ -128,6 +128,15 @@ def release(res: Resource, request_id: str) -> tuple[Resource, bool]:
     return _with_availability(res, av, [a for a in res.allocations if a.request_id != request_id]), True
 
 
+def gained_supply(before: Resource, after: Resource) -> bool:
+    """Did an update make more units usable? (came back online, or restocked while available)
+    Then waiting requests deserve another attempt (wake-up, FR-19)."""
+    if after.status != ResourceStatus.AVAILABLE:
+        return False
+    return (before.status != ResourceStatus.AVAILABLE
+            or after.availability.quantity_remaining > before.availability.quantity_remaining)
+
+
 def update_availability(res: Resource, status: ResourceStatus | None, quantity_remaining: int | None) -> Resource:
     """PUT /resources/{id}/status: switch online/offline and/or restock."""
     if status == ResourceStatus.EXHAUSTED:

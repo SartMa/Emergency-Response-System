@@ -10,6 +10,8 @@ Internal (matching-service only):
   POST /internal/requests/{id}/unmatched   no resource available
 """
 
+import asyncio
+import random
 from collections import Counter
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -19,6 +21,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
 from services.common.amqp import AmqpClient
+from services.common.config import env_float
 from services.common.http import parse_if_match, setup_app
 from services.common.logging import setup_logging
 from services.common.storage_client import StorageClient
@@ -29,12 +32,26 @@ log = setup_logging("request-service")
 storage = StorageClient()
 broker = AmqpClient()
 service = RequestService(storage, broker)
+RECONCILE_INTERVAL_S = env_float("RECONCILE_INTERVAL_S", 15.0)
+
+
+async def reconcile_loop() -> None:
+    """Re-send requests whose match command was lost (see RequestService.reconcile_pending).
+    The interval is jittered so the request-service pods don't all scan at the same moment."""
+    while True:
+        await asyncio.sleep(RECONCILE_INTERVAL_S * random.uniform(0.8, 1.2))
+        try:
+            await service.reconcile_pending()
+        except Exception as exc:  # storage briefly unavailable etc.: just try next round
+            log.warning(f"reconciler round failed: {exc!r}")
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     broker.start()
+    reconciler = asyncio.create_task(reconcile_loop())
     yield
+    reconciler.cancel()
     await broker.close()
     await storage.close()
 

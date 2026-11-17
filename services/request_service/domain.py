@@ -10,6 +10,7 @@ rejected with 409 INVALID_TRANSITION.
 """
 
 import uuid
+from datetime import datetime
 from enum import StrEnum
 
 from pydantic import BaseModel, Field
@@ -112,6 +113,26 @@ def assign(req: EmergencyRequest, assignment: Assignment) -> EmergencyRequest:
                        details={"status": req.status})
     updated = transition(req, S.ASSIGNED, note=f"resource {assignment.resource_id} at {assignment.distance_km} km")
     return updated.model_copy(update={"assignment": assignment, "match_attempts": req.match_attempts + 1})
+
+
+def stale_pending(reqs: list, now: datetime, min_age_s: float,
+                  recently_resent: dict[str, datetime], resend_every_s: float) -> list:
+    """Reconciler rule (DESIGN.md §6.2): which requests look like their match command was lost?
+
+    A request should leave PENDING within a second or two (matching marks it ASSIGNED or
+    UNMATCHED). One still PENDING after `min_age_s` was probably stored while RabbitMQ was down,
+    or its publish failed. We re-send it, but not more often than every `resend_every_s`, so a
+    long queue backlog does not get flooded with duplicates. Duplicates are harmless anyway:
+    the matching consumer skips requests that are no longer PENDING/UNMATCHED."""
+    out = []
+    for r in reqs:
+        if r.status != S.PENDING:
+            continue
+        age = (now - datetime.fromisoformat(r.created_at)).total_seconds()
+        last = recently_resent.get(r.id)
+        if age >= min_age_s and (last is None or (now - last).total_seconds() >= resend_every_s):
+            out.append(r)
+    return out
 
 
 def mark_unmatched(req: EmergencyRequest) -> EmergencyRequest:

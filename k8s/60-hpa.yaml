@@ -1,0 +1,31 @@
+# Autoscaling for matching-service (Tier 2). Needs the metrics-server addon:
+#   minikube addons enable metrics-server        (make k8s-start does this)
+# Without it the HPA shows <unknown> targets and simply does nothing; nothing else breaks.
+#
+# Target: 50% of the pod's CPU *request* (50m in 40-services.yaml), i.e. ~25m CPU on average.
+# Matching pods are stateless competing consumers, so adding pods adds throughput directly.
+# Storage nodes and the coordinator are deliberately NOT autoscaled (stateful / single instance).
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: matching-service
+  namespace: erm
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: matching-service
+  minReplicas: 2
+  maxReplicas: 5
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: { type: Utilization, averageUtilization: 50 }
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 0        # react to a burst immediately
+      policies: [{ type: Pods, value: 2, periodSeconds: 15 }]
+    scaleDown:
+      stabilizationWindowSeconds: 60       # default is 300 s; shorter so the demo shows scale-in too
+      policies: [{ type: Pods, value: 1, periodSeconds: 30 }]

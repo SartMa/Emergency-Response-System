@@ -137,8 +137,14 @@ async def test_sync_match_endpoint_and_cancel_compensation(api):
     assert r.status_code == 409 and r.json()["error"]["code"] == "NO_RESOURCE_AVAILABLE"
 
     bus = await register(api, "transportation", near(spot, 2), quantity=1, name="bus")
+    # Two paths race for this request now: our POST /match and the automatic wake-up triggered
+    # by registering the bus. Exactly one wins; the other sees NOT_MATCHABLE. Either way the
+    # request must end up on the bus, and the bus must be used exactly once.
     r = await api.post(f"/match/{req['id']}")
-    assert r.status_code == 200 and r.json()["resource_id"] == bus["id"]
+    assert (r.status_code == 200 and r.json()["resource_id"] == bus["id"]) or \
+           (r.status_code == 409 and r.json()["error"]["code"] == "NOT_MATCHABLE"), r.text
+    done = await wait_status(api, req["id"], {"ASSIGNED"})
+    assert done["assignment"]["resource_id"] == bus["id"]
     assert (await api.get(f"/resources/{bus['id']}")).json()["status"] == "EXHAUSTED"
 
     # cancel -> request.cancelled event -> resource-service releases the quantity (saga compensation)
@@ -149,6 +155,35 @@ async def test_sync_match_endpoint_and_cancel_compensation(api):
             break
         await asyncio.sleep(0.2)
     assert res["status"] == "AVAILABLE" and res["allocations"] == []
+
+
+async def test_wakeup_on_new_and_freed_supply(api):
+    """FR-19: waiting requests are matched automatically when supply appears or is freed,
+    without anyone calling POST /match."""
+    spot = isolated_spot()
+    first = await create(api, "shelter", spot, quantity=10, urgency=5)
+    second = await create(api, "shelter", near(spot, 1), quantity=10, urgency=4)
+    await wait_status(api, first["id"], {"UNMATCHED"})
+    await wait_status(api, second["id"], {"UNMATCHED"})
+
+    hall = await register(api, "shelter", near(spot, 3), quantity=10, name="hall")  # room for only one
+    # Both are woken up; urgency orders the queue, but two matching pods may run them at the same
+    # moment, so we only require that exactly one gets the hall.
+    deadline = asyncio.get_running_loop().time() + 15
+    while asyncio.get_running_loop().time() < deadline:
+        states = {r["id"]: (await api.get(f"/requests/{r['id']}")).json() for r in (first, second)}
+        winners = [s for s in states.values() if s["status"] == "ASSIGNED"]
+        if winners:
+            break
+        await asyncio.sleep(0.3)
+    assert len(winners) == 1 and winners[0]["assignment"]["resource_id"] == hall["id"]
+    loser = next(s for s in states.values() if s["id"] != winners[0]["id"])
+    assert loser["status"] == "UNMATCHED"
+
+    # Cancelling the winner frees the hall -> resource.released -> the other one is woken up.
+    await api.put(f"/requests/{winners[0]['id']}/status", json={"status": "CANCELLED"})
+    done = await wait_status(api, loser["id"], {"ASSIGNED"}, timeout=15)
+    assert done["assignment"]["resource_id"] == hall["id"]
 
 
 async def test_no_over_allocation_under_concurrency(api):

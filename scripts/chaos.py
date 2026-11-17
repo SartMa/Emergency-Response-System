@@ -200,6 +200,10 @@ class Chaos:
         missing_alloc = assigned_pairs - alloc_pairs  # request thinks it has quantity the depot doesn't record
         stuck = [rid for rid, r in ours.items() if r and r["status"] == "PENDING" and self.acked[rid]["queued"]]
 
+        # IDs behind each failed check (first 20), written to the JSON report for debugging
+        self.failures = {"lost": lost[:20], "reverted_cancels": bad_cancel[:20],
+                         "orphaned_allocations": sorted(orphan_alloc)[:20],
+                         "missing_allocations": sorted(missing_alloc)[:20], "stuck_pending": stuck[:20]}
         diverged = [f"shard {s['shard_id']}: " + ", ".join(f"{n['node_id']} differs in {n.get('differing_keys')} keys"
                                                           for n in s["nodes"] if not n["identical"])
                     for s in verify["shards"] if not s["consistent"]]
@@ -273,6 +277,7 @@ class Chaos:
             with open(self.args.report, "w") as f:
                 json.dump({"mode": self.args.mode, "duration_s": self.args.duration, "kills": self.kills,
                            "checks": [{"check": n, "passed": p, "detail": d} for n, p, d in results],
+                           "failures": getattr(self, "failures", {}),
                            "client_outcomes": dict(self.codes), "events": sorted(self.events.values(), key=lambda e: e["t"]),
                            "latency_ms": {"p50": pct(.5), "p95": pct(.95), "max": pct(1.0)}}, f, indent=2)
             print(f" report written to {self.args.report}")

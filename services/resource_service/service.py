@@ -30,14 +30,22 @@ class ResourceService:
 
     async def register(self, body: RegisterResource) -> tuple[Resource, int]:
         res = domain.new_resource(body)
-        version = await self.storage.put(resource_key(res.id), res.model_dump(mode="json"), expected_version=0)
-        try:
-            # Tier 2 uses this to wake up UNMATCHED requests of the same type (FR-19).
-            await self.broker.publish(EVENTS_EXCHANGE, "resource.registered",
-                                      {"resource_id": res.id, "type": res.type})
-        except Unavailable:
-            log.warning("could not publish resource.registered")
+        version = await self.storage.create(resource_key(res.id), res.model_dump(mode="json"))
+        await self._announce_supply("resource.registered", res)
         return res, version
+
+    async def _announce_supply(self, event: str, res: Resource) -> None:
+        """Tell matching that supply appeared or grew, so UNMATCHED requests of this type near
+        this location get another attempt (wake-up, FR-19). Best effort: if RabbitMQ is down,
+        the waiting requests are not lost, they just wait for the next supply event."""
+        try:
+            await self.broker.publish(EVENTS_EXCHANGE, event, {
+                "event": event, "resource_id": res.id, "type": res.type,
+                "lat": res.location.lat, "lon": res.location.lon,
+                "quantity_remaining": res.availability.quantity_remaining,
+            })
+        except Unavailable:
+            log.warning(f"could not publish {event} for {res.id}")
 
     async def get(self, resource_id: str) -> tuple[Resource, int]:
         item = await self.storage.get(resource_key(resource_id))
@@ -86,19 +94,28 @@ class ResourceService:
             log.info("released (compensation)", extra={"fields": {
                 "resource_id": resource_id, "request_id": request_id,
                 "remaining": res.availability.quantity_remaining}})
+            if res.status == ResourceStatus.AVAILABLE:
+                await self._announce_supply("resource.released", res)
         return res, version
 
     async def update_status(self, resource_id: str, status: ResourceStatus | None,
                             quantity_remaining: int | None, if_match: int | None) -> tuple[Resource, int]:
+        before, _ = await self.get(resource_id)
         res, version, _ = await self._update(
             resource_id, lambda r: (domain.update_availability(r, status, quantity_remaining), True), if_match)
+        if domain.gained_supply(before, res):
+            await self._announce_supply("resource.restocked", res)
         return res, version
 
     async def on_request_cancelled(self, event: dict) -> None:
         """Consumer of `request.cancelled` (choreography): undo the reservation (FR-20)."""
         resource_id, request_id = event.get("resource_id"), event.get("request_id")
-        if not resource_id or not request_id:
+        if not request_id:
             raise PermanentError(f"malformed request.cancelled event: {event}")
+        if not resource_id:
+            # The request was cancelled before it was ever assigned: nothing is reserved, so there
+            # is nothing to give back. (These used to be dead-lettered by mistake.)
+            return
         try:
             await self.release(resource_id, request_id)
         except NotFound:
