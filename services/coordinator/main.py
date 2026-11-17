@@ -14,11 +14,12 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import httpx
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
-from services.common.config import env_float, env_int
+from services.common.config import env_float, env_int, env_str
 from services.common.errors import NotFound
 from services.common.http import setup_app
 from services.common.logging import setup_logging
@@ -59,6 +60,7 @@ async def lifespan(_: FastAPI):
     yield
     task.cancel()
     await router.close()
+    await mgmt_http.aclose()
 
 
 app = FastAPI(title="Coordinator", lifespan=lifespan)
@@ -123,6 +125,36 @@ async def cluster():
     view = state.to_json(now())
     view["partition_map"] = {str(p): s for p, s in partitioner.partition_map.items()}
     return view
+
+
+RABBITMQ_MGMT_URL = env_str("RABBITMQ_MGMT_URL", "http://rabbitmq:15672")
+RABBITMQ_AUTH = (env_str("RABBITMQ_USER", "guest"), env_str("RABBITMQ_PASS", "guest"))
+mgmt_http = httpx.AsyncClient(timeout=2.0, auth=RABBITMQ_AUTH)
+
+
+@app.get("/internal/queues")
+async def queues():
+    """Queue depths for the dashboard, from RabbitMQ's management API. Purely observational:
+    if RabbitMQ can't be reached we say so instead of failing (the cluster view must keep working)."""
+    try:
+        r = await mgmt_http.get(f"{RABBITMQ_MGMT_URL}/api/queues/%2F")
+        r.raise_for_status()
+    except httpx.HTTPError as exc:
+        return {"available": False, "error": exc.__class__.__name__, "queues": []}
+
+    def rate(q: dict, key: str) -> float:
+        return round(q.get("message_stats", {}).get(key, {}).get("rate", 0.0), 1)
+
+    def order(name: str):  # main queues first, then retry queues by delay (2s, 4s, ... not "16s" < "2s")
+        if name.startswith("matching.retry."):
+            return (1, int(name.removeprefix("matching.retry.").removesuffix("s")), name)
+        return (0, 0, name)
+
+    return {"available": True, "queues": sorted(
+        ({"name": q["name"], "ready": q.get("messages_ready", 0), "in_flight": q.get("messages_unacknowledged", 0),
+          "consumers": q.get("consumers", 0), "in_rate": rate(q, "publish_details"),
+          "out_rate": rate(q, "deliver_get_details")} for q in r.json()),
+        key=lambda q: order(q["name"]))}
 
 
 @app.get("/internal/verify")

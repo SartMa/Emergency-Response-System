@@ -35,6 +35,7 @@ services:
       SUSPECT_AFTER_S: "4"
       DEAD_AFTER_S: "6"
       FORMING_GRACE_S: "5"
+      RABBITMQ_MGMT_URL: http://rabbitmq:15672   # queue depths on the dashboard (guest/guest default)
     ports: ["8090:8000"]
 
   # 3 shards x 2 nodes. Each node has its own volume, so a restarted node keeps its old data

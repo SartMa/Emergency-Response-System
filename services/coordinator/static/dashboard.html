@@ -49,6 +49,12 @@
   .events li { padding: 6px 0; border-bottom: 1px solid var(--border); display: flex; gap: 10px; }
   .events .age { color: var(--muted); min-width: 56px; font-variant-numeric: tabular-nums; }
   #status.err { color: var(--bad); }
+  .scroll { overflow-x: auto; }
+  .qt { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .qt th { text-align: left; color: var(--muted); font-size: 12px; font-weight: 600; padding: 4px 12px 6px 0; white-space: nowrap; }
+  .qt td { padding: 6px 12px 6px 0; border-top: 1px solid var(--border); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .qt td:first-child { font-family: ui-monospace, monospace; }
+  .qt tr.busy td { font-weight: 700; }
   @media (max-width: 600px) { .pmap { grid-template-columns: repeat(6, 1fr); } }
 </style>
 </head>
@@ -64,6 +70,12 @@
 
   <h2>Partition map: sha1(key) mod 12 → shard</h2>
   <div id="pmap" class="pmap card"></div>
+
+  <h2>Message queues (RabbitMQ)</h2>
+  <div class="card scroll"><table class="qt">
+    <thead><tr><th>Queue</th><th>Waiting</th><th>In flight</th><th>Consumers</th><th>In /s</th><th>Out /s</th></tr></thead>
+    <tbody id="queues"><tr><td colspan="6" class="muted">loading…</td></tr></tbody>
+  </table></div>
 
   <h2>Recent cluster events</h2>
   <div class="card"><ul id="events" class="events"></ul></div>
@@ -142,8 +154,32 @@ async function pollVerify() {
   try { verify = await (await fetch('/internal/verify', { cache: 'no-store' })).json(); } catch (e) { verify = null; }
   setTimeout(pollVerify, 3000);
 }
+const QUEUE_ROLE = {
+  'matching.q': 'match commands',
+  'matching.wakeup.q': 'supply events → wake-up',
+  'resource.release.q': 'cancel → release quantity',
+  'erm.dlq': 'dead letters (inspect!)',
+};
+async function pollQueues() {
+  const body = document.getElementById('queues');
+  try {
+    const q = await (await fetch('/internal/queues', { cache: 'no-store' })).json();
+    body.innerHTML = !q.available
+      ? `<tr><td colspan="6" class="muted">RabbitMQ management API unreachable (${esc(q.error)})</td></tr>`
+      : q.queues.map(x => {
+          const role = QUEUE_ROLE[x.name] || (x.name.startsWith('matching.retry.') ? 'delayed retry' : '');
+          return `<tr class="${x.ready + x.in_flight > 0 ? 'busy' : ''}">
+            <td>${esc(x.name)} <span class="muted" style="font-family:system-ui">${role}</span></td>
+            <td>${x.ready}</td><td>${x.in_flight}</td><td>${x.consumers}</td><td>${x.in_rate}</td><td>${x.out_rate}</td></tr>`;
+        }).join('');
+  } catch (e) {
+    body.innerHTML = `<tr><td colspan="6" class="muted">coordinator unreachable</td></tr>`;
+  }
+  setTimeout(pollQueues, 2000);
+}
 poll();
 pollVerify();
+pollQueues();
 </script>
 </body>
 </html>
