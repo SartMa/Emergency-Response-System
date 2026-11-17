@@ -49,6 +49,7 @@ WAKEUP_QUEUE = "matching.wakeup.q"
 DEAD_LETTER_QUEUE = "erm.dlq"
 
 MAX_PRIORITY = 5  # urgency 1..5 maps directly onto message priority (FR-16)
+PUBLISH_TIMEOUT_S = 2.0  # a healthy broker confirms in milliseconds
 
 # Backoff schedule for "no resource right now" (FR-19): exponential, ~1 minute in total.
 # Queue names contain the delay, so changing this list creates new queues instead of clashing
@@ -168,8 +169,17 @@ class AmqpClient:
             correlation_id=None if cid == "-" else cid,
         )
         try:
-            ex = await self._channel.get_exchange(exchange)
-            await ex.publish(message, routing_key=routing_key)
+            # Time limit: while a robust connection is reconnecting, publish() waits for the
+            # broker instead of failing, which would hang the caller's HTTP request until the
+            # Ingress gives up (found in testing). Failing fast keeps NFR-11 true: the request is
+            # stored, the client gets 201 with queued_for_matching=false, and the reconciler
+            # re-sends it once RabbitMQ is back. If the cancelled publish did go out after all,
+            # the resulting duplicate is harmless (idempotent consumer).
+            async def _publish():
+                ex = await self._channel.get_exchange(exchange)
+                await ex.publish(message, routing_key=routing_key)
+
+            await asyncio.wait_for(_publish(), timeout=PUBLISH_TIMEOUT_S)
         except Exception as exc:
             raise Unavailable(f"Publish failed: {exc.__class__.__name__}", code="BROKER_UNAVAILABLE")
 

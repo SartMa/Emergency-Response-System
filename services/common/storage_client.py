@@ -35,8 +35,9 @@ class StorageClient:
         async def once() -> httpx.Response:
             try:
                 response = await self._http.request(method, url, **kwargs)
-            except httpx.ConnectError as exc:
-                # Could not even connect: the request was never sent, so retrying is safe.
+            except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+                # Could not even connect (refused, or no answer to the connection attempt):
+                # the request was never sent, so retrying is safe.
                 raise Unavailable(f"Coordinator unreachable: {exc.__class__.__name__}", code="COORDINATOR_UNAVAILABLE")
             except httpx.TransportError as exc:
                 # Sent, but no answer (timeout / connection dropped): we don't know whether the
