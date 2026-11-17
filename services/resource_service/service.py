@@ -110,8 +110,12 @@ class ResourceService:
     async def on_request_cancelled(self, event: dict) -> None:
         """Consumer of `request.cancelled` (choreography): undo the reservation (FR-20)."""
         resource_id, request_id = event.get("resource_id"), event.get("request_id")
-        if not resource_id or not request_id:
+        if not request_id:
             raise PermanentError(f"malformed request.cancelled event: {event}")
+        if not resource_id:
+            # The request was cancelled before it was ever assigned: nothing is reserved, so there
+            # is nothing to give back. (These used to be dead-lettered by mistake.)
+            return
         try:
             await self.release(resource_id, request_id)
         except NotFound:

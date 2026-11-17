@@ -33,17 +33,39 @@ class WaitingRequest:
     lon: float
     urgency: int
     created_at: str
+    quantity: int = 1
 
 
-def select_for_wakeup(waiting: list[WaitingRequest], type_: str, lat: float | None, lon: float | None,
+@dataclass(frozen=True)
+class Supply:
+    """What one supply event offers: units available now, at a place (None = unknown place)."""
+
+    lat: float | None
+    lon: float | None
+    units: int
+
+
+def select_for_wakeup(waiting: list[WaitingRequest], type_: str, supplies: list[Supply],
                       max_radius_km: float, limit: int) -> list[WaitingRequest]:
-    """Which UNMATCHED requests should get another attempt after a supply event?
+    """Which UNMATCHED requests should get another attempt after supply events of this type?
 
-    Only the same type, only within the matching radius of the new supply (a tanker in Thane
-    can't help someone in Pune), most urgent first, then longest waiting. `limit` stops one
-    event from flooding the queue."""
-    candidates = [r for r in waiting if r.type == type_]
-    if lat is not None and lon is not None:
-        candidates = [r for r in candidates if haversine_km(lat, lon, r.lat, r.lon) <= max_radius_km]
-    candidates.sort(key=lambda r: (-r.urgency, r.created_at))
-    return candidates[:limit]
+    Wake only as many requests as the new supply could actually serve. Walk the waiting
+    requests, most urgent first and then longest waiting; give each one to a supply within the
+    matching radius that still has enough units in our simulation, and wake it only if one
+    exists. A release of 2 units therefore wakes at most 2 single-unit requests.
+
+    Bug this prevents (seen in a chaos run): the first version woke the same 50 requests on
+    every event, whatever the event offered. With frequent small releases, each of those
+    requests was re-matched and re-written ~37 times, overloading the whole system."""
+    budget = [s.units for s in supplies]
+    chosen: list[WaitingRequest] = []
+    for r in sorted((r for r in waiting if r.type == type_), key=lambda r: (-r.urgency, r.created_at)):
+        if len(chosen) >= limit:
+            break
+        for i, s in enumerate(supplies):
+            near = s.lat is None or s.lon is None or haversine_km(s.lat, s.lon, r.lat, r.lon) <= max_radius_km
+            if near and budget[i] >= r.quantity:
+                budget[i] -= r.quantity
+                chosen.append(r)
+                break
+    return chosen
