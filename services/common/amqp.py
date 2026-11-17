@@ -32,7 +32,7 @@ import aio_pika
 from aio_pika.abc import AbstractIncomingMessage, AbstractRobustConnection
 
 from services.common.config import RABBITMQ_URL
-from services.common.errors import Unavailable
+from services.common.errors import GatewayTimeout, Unavailable
 from services.common.logging import correlation_id, new_correlation_id
 
 log = logging.getLogger("amqp")
@@ -198,7 +198,9 @@ class AmqpClient:
                 payload = json.loads(message.body)
                 await handler(payload)
                 await message.ack()
-            except Unavailable as exc:
+            except (Unavailable, GatewayTimeout) as exc:
+                # 503 = dependency down, 504 = outcome unknown. Both are safe to retry because every
+                # consumer is idempotent (a chaos run showed 504s under load were dead-lettered).
                 log.warning(f"dependency unavailable, requeueing message: {exc.message}")
                 await asyncio.sleep(1.0)
                 await message.nack(requeue=True)

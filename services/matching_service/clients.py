@@ -56,6 +56,12 @@ class ResourceServiceClient(_Client):
         body = await self.call("GET", "/resources", params={"type": type_, "status": "AVAILABLE"})
         return body["items"]
 
+    async def list_by_type(self, type_: str) -> list[dict]:
+        """All resources of a type, whatever their status. The saga needs EXHAUSTED ones too, to
+        find a reservation it already holds (an exhausted resource may hold it)."""
+        body = await self.call("GET", "/resources", params={"type": type_})
+        return body["items"]
+
     async def reserve(self, resource_id: str, request_id: str, quantity: int) -> dict:
         return await self.call("POST", f"/internal/resources/{resource_id}/reserve",
                                json={"request_id": request_id, "quantity": quantity})
