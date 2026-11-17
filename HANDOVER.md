@@ -17,7 +17,7 @@ Read this first, then `DESIGN.md` (the why) and `CLAUDE.md` (the rules + command
 | Docker images + docker-compose | done | `make up` |
 | Kubernetes: Deployments, StatefulSets, Services, Ingress, probes, ConfigMap/Secret | done | `make k8s-deploy`, all 14 pods ready |
 | K8s pod failure + recovery, scaling | done | demos 08, 09 |
-| Tests: normal + failure | done | 50 tests pass (42 unit, 8 integration); the 7 integration tests also pass on minikube |
+| Tests: normal + failure | done | 50 tests pass (42 unit, 8 integration) on minikube, plus `make chaos` (6 automatic guarantee checks under random pod kills) |
 
 **Our extras (Tier 1), all done:** geo matching with quantity, no over-allocation under concurrency (optimistic concurrency), saga with compensation on cancel, priority queue by urgency, DLQ, live dashboard, `/internal/locate`, status history, correlation IDs in JSON logs, coordinator self-rebuild after restart, and the `balanced` strategy (from Tier 2).
 
