@@ -76,6 +76,8 @@ class ClusterState:
         self.timing = timing or Timing()
         self.nodes: dict[str, NodeInfo] = {}
         self.primary: dict[int, str | None] = {s: None for s in range(num_shards)}
+        # Shard -> the primary that failed while no replica was in sync. The shard waits for it.
+        self.last_primary: dict[int, str | None] = {s: None for s in range(num_shards)}
         self.forming_until = now + self.timing.forming_grace_s
         self.events: deque[dict] = deque(maxlen=50)  # shown on the dashboard
 
@@ -173,16 +175,34 @@ class ClusterState:
     def _elect_missing_primaries(self, now: float) -> None:
         """Give every shard without a primary a new one, if that is safe.
 
-        This happens (a) after a coordinator (re)start, when the old roles were lost (soft
-        state, ADR-14), and (b) when both nodes of a shard were down and one comes back.
-        We pick the live node that has seen the most writes (highest version_sum). We do NOT
-        elect it if a DEAD node of the shard reported a higher version_sum: that node may hold
-        acknowledged writes, so we keep the shard unavailable until it returns. That is the
-        consistency-over-availability choice (CP) for this rare double failure."""
+        Case 1: the primary failed while no replica was in sync (failover() remembered it in
+        last_primary). Only that node is known to hold every acknowledged write, so we wait for
+        it and re-elect it when it is back. Electing anyone else could lose acknowledged writes:
+        a chaos run showed a STALE replica winning a version_sum comparison against the
+        returning primary's slightly out-of-date report, after which the primary was resynced
+        FROM the stale node and acknowledged writes were deleted. This is the
+        consistency-over-availability choice (CP).
+
+        Case 2: we have no memory (just after a coordinator restart, soft state ADR-14). Pick
+        the live node that has seen the most writes (highest version_sum), unless a DEAD node
+        reported more. That is the best guess available without a persistent log."""
         for shard_id in range(self.num_shards):
             if self.primary[shard_id] is not None:
                 continue
             nodes = self.shard_nodes(shard_id)
+
+            waiting_for = self.last_primary.get(shard_id)
+            if waiting_for is not None:  # case 1
+                node = self.nodes.get(waiting_for)
+                if node is not None and node.health == Health.ALIVE:
+                    self._make_primary(node, now, reason="previous primary is back; it holds every acknowledged write")
+                    self.last_primary[shard_id] = None
+                    for other in nodes:
+                        if other is not node:
+                            other.role, other.sync = Role.REPLICA, Sync.STALE
+                continue
+
+            # case 2
             candidates = [n for n in nodes if n.usable()]
             if not candidates:
                 continue
@@ -210,18 +230,33 @@ class ClusterState:
         promoted = self._promote_in_sync_replica(shard_id, exclude=failed_node_id, now=now)
         if promoted is None:
             self.primary[shard_id] = None
-            self._event(now, "unavailable", f"shard {shard_id} has NO in-sync replica: unavailable (503)")
+            # Remember who it was: that node (with its persistent volume) holds every acknowledged
+            # write, so the shard waits for it instead of electing a node that is missing writes.
+            self.last_primary[shard_id] = failed_node_id
+            self._event(now, "unavailable", f"shard {shard_id} has NO in-sync replica: unavailable (503) "
+                                            f"until {failed_node_id} is back")
         return promoted
 
     def replica_write_failed(self, node_id: str, now: float) -> None:
         """Synchronous replication to this replica failed. The write was still acknowledged
         (degraded mode, DESIGN.md §5.3); the replica is STALE until resynced."""
         node = self.nodes.get(node_id)
+        if node and self.primary.get(node.shard_id) == node_id:
+            return  # the primary itself: that's a failover matter (handled on its next failed request)
         if node and node.sync != Sync.STALE:
             node.sync = Sync.STALE
             if node.health == Health.ALIVE:
                 node.health = Health.SUSPECT
             self._event(now, "stale", f"{node_id} missed a replicated write, now STALE (degraded mode)")
+
+    def replica_diverged(self, node_id: str, now: float, differing_keys: int) -> None:
+        """Anti-entropy found that an IN_SYNC replica does not match its primary. It must not be
+        promoted while it is missing data, so it becomes STALE and the repair loop resyncs it."""
+        node = self.nodes.get(node_id)
+        if node and node.sync == Sync.IN_SYNC and self.primary.get(node.shard_id) != node_id:
+            node.sync = Sync.STALE
+            self._event(now, "diverged", f"anti-entropy: {node_id} differs from its primary in "
+                                         f"{differing_keys} key(s); marked STALE for resync")
 
     def _promote_in_sync_replica(self, shard_id: int, exclude: str, now: float) -> NodeInfo | None:
         for node in self.shard_nodes(shard_id):
@@ -245,10 +280,21 @@ class ClusterState:
     def mark_syncing(self, node_id: str) -> None:
         self.nodes[node_id].sync = Sync.SYNCING
 
-    def mark_in_sync(self, node_id: str, now: float, pulled: int) -> None:
+    def mark_in_sync(self, node_id: str, now: float, pulled: int) -> bool:
+        """A resync finished and the digests matched. Only trust the node if it is still SYNCING.
+        If something marked it STALE meanwhile (a live replica write to it failed, or it was
+        declared DEAD), it is missing at least one write, so it must resync again.
+
+        Bug found after a failed chaos run: this used to set IN_SYNC unconditionally, overwriting
+        that STALE. The result was a replica marked IN_SYNC that silently lacked writes, and a
+        failover to it lost them."""
         node = self.nodes[node_id]
+        if node.sync != Sync.SYNCING:
+            self._event(now, "stale", f"{node_id} resync finished but it missed writes meanwhile; resyncing again")
+            return False
         node.sync = Sync.IN_SYNC
         self._event(now, "in_sync", f"{node_id} resynced ({pulled} keys copied), now IN_SYNC replica")
+        return True
 
     def mark_sync_failed(self, node_id: str) -> None:
         node = self.nodes.get(node_id)

@@ -53,12 +53,29 @@ async def monitor_loop() -> None:
         await asyncio.sleep(0.5)
 
 
+ANTI_ENTROPY_INTERVAL_S = env_float("ANTI_ENTROPY_INTERVAL_S", 30.0)
+
+
+async def anti_entropy_loop() -> None:
+    """Background check that IN_SYNC replicas really match their primaries (Router.anti_entropy_once)."""
+    while True:
+        await asyncio.sleep(ANTI_ENTROPY_INTERVAL_S)
+        if state.is_forming(now()):
+            continue
+        try:
+            await router.anti_entropy_once()
+        except Exception:
+            log.exception("anti-entropy round failed")
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     task = asyncio.create_task(monitor_loop())
+    anti_entropy = asyncio.create_task(anti_entropy_loop())
     log.info("coordinator started", extra={"fields": {"shards": num_shards, "timing": timing.__dict__}})
     yield
     task.cancel()
+    anti_entropy.cancel()
     await router.close()
     await mgmt_http.aclose()
 
