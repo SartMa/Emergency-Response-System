@@ -17,7 +17,7 @@ Read this first, then `DESIGN.md` (the why) and `CLAUDE.md` (the rules + command
 | Docker images + docker-compose | done | `make up` |
 | Kubernetes: Deployments, StatefulSets, Services, Ingress, probes, ConfigMap/Secret | done | `make k8s-deploy`, all 14 pods ready |
 | K8s pod failure + recovery, scaling | done | demos 08, 09 |
-| Tests: normal + failure | done | 28 tests pass (21 unit, 7 integration); the 7 integration tests also pass on minikube |
+| Tests: normal + failure | done | 50 tests pass (42 unit, 8 integration); the 7 integration tests also pass on minikube |
 
 **Our extras (Tier 1), all done:** geo matching with quantity, no over-allocation under concurrency (optimistic concurrency), saga with compensation on cancel, priority queue by urgency, DLQ, live dashboard, `/internal/locate`, status history, correlation IDs in JSON logs, coordinator self-rebuild after restart, and the `balanced` strategy (from Tier 2).
 
@@ -26,7 +26,7 @@ Read this first, then `DESIGN.md` (the why) and `CLAUDE.md` (the rules + command
 ```bash
 # local
 make up                     # API http://localhost:8080, dashboard http://localhost:8090/dashboard
-make test                   # 28 tests
+make test                   # 50 tests
 make down                   # stops and wipes volumes
 
 # kubernetes (minikube is already set up on Sarthak's laptop)
@@ -76,12 +76,16 @@ In priority order. Each item lists where to change the code.
 
 1. **Practise the demo** on minikube end to end (30 min). Everything is scripted.
 2. **Report / slides.** `DESIGN.md` §2–7 + §10 have nearly everything: requirements, diagram, ADR table, patterns table. Add screenshots of the dashboard during demo 06.
-3. **Tier 2 features: written on branch `feature/tier2`, NOT yet tested end to end.** See §4.1 below. Merge into `main` only after the checklist passes.
-4. Run `make test` after any change. If you touch cluster logic, also run demo 06.
+3. **Tier 2 features: done, tested and merged into `main` (2026-11-17).** See §4.1.
+4. Run `make test` after any change. If you touch cluster logic, also run `make chaos`.
 
-### 4.1 Branch `feature/tier2`: what's in it and how to test it
+Ownership changed on 2026-11-17: Sarthak owns this project (ERM) to the end. The friend does CSE 816 separately.
 
-Written 2026-11-17 for the friend to test. What was verified while writing: unit tests (26 pass), every service imports cleanly, the compose file and YAML validate, and the RabbitMQ topology was checked against a real RabbitMQ. A retry message came back to `matching.q` after 2.1 s with its priority kept, and all 3 supply events reached the wake-up queue. **Not run:** the full stack (compose or minikube), the integration tests, the demo scripts.
+### 4.1 Tier 2 (formerly branch `feature/tier2`): what's in it and how it was tested
+
+**Status: tested on minikube and merged.** The checklist below was run in full on 2026-11-17. The chaos test found several real bugs along the way, some of them already in `main` (see DESIGN.md §10 N12). All are fixed. Final results: 50 tests pass; 3 normal chaos runs in a row and 1 aggressive run had every check passing and every write accepted. Checklist results: retry chain 2/4/8/16/32 s then stop (traced for one request); wake-up within ~1 s of new supply; reconciler re-sent a request created while RabbitMQ was down, and it was matched 19 s after RabbitMQ came back; queue table shows all 9 queues; HPA scaled 2 → 5 pods at 202% CPU.
+
+The checklist is kept below for re-testing after future changes.
 
 | Feature | Where | What it does |
 |---|---|---|
@@ -112,7 +116,9 @@ Written 2026-11-17 for the friend to test. What was verified while writing: unit
 
 - **Single coordinator**: if its pod dies, storage is unavailable for about 5–7 s until Kubernetes restarts it and nodes re-register. Services ride most of that out with exponential backoff (ADR-16); a few requests may still get 503 with `Retry-After`. Required by the spec (1 coordinator). Mitigated by soft state; a fix would need consensus (DDIA ch. 10).
 - **Hot resource**: many requests for the same resource are processed one after another (correct but slower: about 30 per second). Spread-out load scales with pods.
-- **Events lost if RabbitMQ is down**: requests are still stored (201, `queued_for_matching: false`). On `main` they stay PENDING until someone calls `POST /match/{id}`; on `feature/tier2` the reconciler re-sends them within about 45 s. A lost `request.cancelled` event is still not repaired automatically (the quantity stays reserved), on either branch.
+- **RabbitMQ down**: requests are still stored (201 within ~2 s, `queued_for_matching: false`) and the reconciler re-sends them within about 45 s of RabbitMQ returning. A `request.cancelled` event lost while RabbitMQ is down is not repaired automatically: the quantity stays reserved until the matching saga next sees that request.
+- **Coordinator CPU**: every storage operation goes through one Python process. Under chaos load with many retries it saturates about 1 core and latency rises from ~25 ms to ~1 s. Correctness holds. Scaling it out would need partitioned coordinators or consensus.
+- **Waiting for a lost primary**: if a primary dies while its replica is not in sync, the shard waits for that node to come back, because it holds every acknowledged write. If its disk were lost for good, the shard would stay unavailable until an operator steps in (a deliberate CP choice).
 - **Degraded mode**: if a replica is down, writes are acknowledged with one copy. If the primary then also dies before the replica resyncs, the shard becomes unavailable (it does not lose data, it waits).
 - **Election after a coordinator restart** uses `version_sum` as a "who has seen more writes" heuristic, not a real log position.
 - No authentication (out of scope; stated in NFR-12).
@@ -128,5 +134,7 @@ Written 2026-11-17 for the friend to test. What was verified while writing: unit
 - **At-least-once delivery: what if a message is processed twice?** Matching skips requests that aren't PENDING/UNMATCHED, and reserve is idempotent per `request_id`.
 - **Why not shard by location?** A disaster is local, so one shard would take all the load (ADR-15).
 - **Why StatefulSets for storage?** Stable names (`shard-1-0`), stable DNS, and a volume that survives restarts, which is what makes delta resync possible.
+- **How do you know it's correct, not just that the demo works?** The chaos test kills random storage pods under load and checks six guarantees automatically. It found real bugs: a resync race, an unsafe election, a write racing a failover, and a saga that guessed on timeouts. Each one now has a unit test that fails on the old code (DESIGN.md §10 N12).
+- **What does the saga do when a call times out?** It doesn't guess. Every step is idempotent, so it retries; on a conflict it re-reads (assigned to this resource = our earlier attempt succeeded); it compensates only on a definite failure; and a redelivered message resumes from the reservation already held.
 - **What stops a retry storm during failover?** Callers back off exponentially with jitter (0.2 s doubling to 2 s), and 503s carry `Retry-After` (ADR-16).
 - **How is failure detected?** Heartbeat every 2 s (SUSPECT after 4 s, DEAD after 6 s), and immediately when a request to the primary fails (fast failover).
