@@ -52,6 +52,32 @@ def router_with_nodes(state: ClusterState, failover_during_put: bool, new_primar
     return router, stores
 
 
+async def test_timed_out_write_is_read_repaired_without_failover():
+    """The primary applied the write but its answer timed out (busy, not dead). We must not fail
+    a live node over on a guess, and the write that did land must reach the replica."""
+    state = cluster()
+    stores: dict[str, dict] = {"n0": {}, "n1": {}}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        node = request.url.host
+        if request.method == "PUT":
+            stores[node]["req:a"] = json.loads(request.content)["value"]
+            raise httpx.ReadTimeout("answer lost", request=request)
+        if request.method == "GET":  # read-back
+            return httpx.Response(200, json={"key": "req:a", "value": stores[node]["req:a"], "version": 1, "deleted": False})
+        if request.url.path == "/internal/replicate":
+            stores[node]["req:a"] = json.loads(request.content)["value"]
+            return httpx.Response(200, json={"applied": True})
+        return httpx.Response(404)
+
+    router = Router(state, Partitioner({p: 0 for p in range(12)}))
+    router.http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    with pytest.raises(Unavailable):  # outcome unknown to the client: 503, it retries
+        await router.put("req:a", {"x": 1}, expected_version=0)
+    assert state.primary[0] == "n0"                 # no failover of a node that was only slow
+    assert stores["n1"].get("req:a") == {"x": 1}    # the write that landed is replicated
+
+
 async def test_normal_write_is_replicated():
     state = cluster()
     router, stores = router_with_nodes(state, failover_during_put=False)

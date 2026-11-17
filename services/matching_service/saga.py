@@ -115,11 +115,12 @@ class MatchingSaga:
 
         if held:
             # Step 0: resume. Quantity is already reserved for this request: assign it there.
-            # (Any extra reservations, from duplicate sagas, are given back.)
-            first, extra = held[0], held[1:]
-            for r in extra:
-                await self._idempotent(lambda rid=r["id"]: self.resources.release(rid, request_id), "release duplicate")
-            res = _resource_view(first)
+            # Other reservations for the same request are NOT released here: they may belong to a
+            # duplicate saga that is still running (a retry, a wake-up or the reconciler's resend).
+            # That saga releases its own if its assign loses; one that died is cleaned up by the
+            # not-matchable branch above on a later delivery. (Releasing them here caused a
+            # request to be assigned to a resource whose reservation had just been given back.)
+            res = _resource_view(held[0])
             distance = round(haversine_km(view.lat, view.lon, res.lat, res.lon), 2)
             log.info(f"request {request_id}: resuming with the reservation already held on {res.id}")
             return await self._assign(req, res, distance)

@@ -104,6 +104,21 @@ async def test_redelivery_resumes_from_the_reservation_already_held():
     assert res.held("r1") == [] and res.held("r2") == ["req-1"]
 
 
+async def test_resume_does_not_release_a_concurrent_sagas_reservation():
+    """Race seen in a chaos run: two sagas for the same request hold reservations on r1 and r2.
+    The resuming one must not release r2: the other saga may be about to assign there."""
+    reqs, res = FakeRequests(), FakeResources("r1", "r2")
+    await res.reserve("r1", "req-1", 2)
+    await res.reserve("r2", "req-1", 2)
+    result = await saga(reqs, res).match("req-1")
+    assert result.outcome == "matched" and res.held("r1") == ["req-1"] and res.held("r2") == ["req-1"]
+    # once the request is assigned, a later delivery cleans up the one it does not use
+    await saga(reqs, res).match("req-1")
+    assert res.held(result.resource_id) == ["req-1"]
+    other = "r2" if result.resource_id == "r1" else "r1"
+    assert res.held(other) == []
+
+
 async def test_leftover_reservation_of_a_cancelled_request_is_released():
     reqs, res = FakeRequests(status="CANCELLED"), FakeResources("r1")
     await res.reserve("r1", "req-1", 2)

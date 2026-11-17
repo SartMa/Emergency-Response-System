@@ -48,12 +48,32 @@ class Router:
             raise Unavailable(f"Shard {shard_id} has no available in-sync node", code="SHARD_UNAVAILABLE")
         return node
 
-    async def _on_primary(self, shard_id: int, call):
-        """Run `call(primary_node)`; if the primary is unreachable, fail over and retry once."""
+    async def _on_primary(self, shard_id: int, call, on_timeout=None):
+        """Run `call(primary_node)`. If the primary is unreachable, fail over and retry once.
+
+        A *slow* primary is different from a dead one. A connection that is refused or reset
+        (a killed pod) means dead: fail over immediately (ADR-07). A read timeout on an open
+        connection only means "no answer yet": the node is probably alive, just busy. Failing
+        it over then was a guess that went wrong under load (a chaos run saw 21 failovers for
+        15 kills, each one causing a resync and even more load). So on a read timeout we don't
+        fail over (heartbeats still catch a node that really hangs). We give `on_timeout` a
+        chance to clean up a write whose outcome is unknown, then answer 503 so the client retries."""
+
+        def is_slow(exc: Exception) -> bool:
+            return isinstance(exc, httpx.TimeoutException) and not isinstance(exc, httpx.ConnectTimeout)
+
+        async def slow(node: NodeInfo, exc: Exception):
+            log.warning(f"primary {node.node_id} did not answer in time ({exc.__class__.__name__}); not failing over")
+            if on_timeout is not None:
+                await on_timeout(node)
+            raise Unavailable(f"Shard {shard_id}: primary did not answer in time; retry", code="PRIMARY_TIMEOUT")
+
         primary = self._primary_or_503(shard_id)
         try:
             return await call(primary)
         except httpx.TransportError as exc:
+            if is_slow(exc):
+                await slow(primary, exc)
             log.warning(f"primary {primary.node_id} unreachable ({exc.__class__.__name__}); failing over",
                         extra={"fields": {"shard": shard_id}})
             self.state.failover(shard_id, primary.node_id, now(), reason=exc.__class__.__name__)
@@ -61,8 +81,30 @@ class Router:
             try:
                 return await call(new_primary)
             except httpx.TransportError as exc2:
+                if is_slow(exc2):
+                    await slow(new_primary, exc2)
                 self.state.failover(shard_id, new_primary.node_id, now(), reason=exc2.__class__.__name__)
                 raise Unavailable(f"Shard {shard_id}: primary and replica unreachable", code="SHARD_UNAVAILABLE")
+
+    async def _repair_after_timeout(self, shard_id: int, node: NodeInfo, key: str) -> None:
+        """A write to `node` timed out: it may or may not have been applied. Read back what the
+        node holds for `key` now and replicate exactly that ("read repair"), so a write that did
+        land is never left on the primary alone. If even the read-back fails, mark the followers
+        STALE: they might be missing a write, so they must not be promoted until resynced."""
+        try:
+            r = await self.http.get(f"{node.url}/internal/data/{key}", params={"include_deleted": "true"},
+                                    timeout=5.0)
+            if r.status_code == 404:
+                return  # the write never landed: nothing to repair
+            r.raise_for_status()
+            rec = r.json()
+            await self._replicate(shard_id, node, key, rec["value"], rec["version"], rec["deleted"])
+            log.info(f"read repair after timeout: replicated {key} v{rec['version']} from {node.node_id}")
+        except Exception as exc:
+            log.warning(f"read repair of {key} failed ({exc.__class__.__name__}); marking followers STALE")
+            for follower in self.state.shard_nodes(shard_id):
+                if follower.node_id != node.node_id:
+                    self.state.replica_write_failed(follower.node_id, now())
 
     # ------------------------------------------------------------------ KV operations
     async def get(self, key: str) -> dict:
@@ -113,7 +155,8 @@ class Router:
             return await self.http.put(f"{node.url}/internal/data/{key}",
                                        json={"value": value, "expected_version": expected_version})
 
-        r = await self._on_primary(shard_id, call)
+        r = await self._on_primary(shard_id, call,
+                                   on_timeout=lambda node: self._repair_after_timeout(shard_id, node, key))
         if r.status_code == 409:
             details = r.json().get("error", {}).get("details", {})
             raise VersionConflict(f"Version conflict on {key}", details=details)
@@ -132,7 +175,8 @@ class Router:
             params = {} if expected_version is None else {"expected_version": expected_version}
             return await self.http.delete(f"{node.url}/internal/data/{key}", params=params)
 
-        r = await self._on_primary(shard_id, call)
+        r = await self._on_primary(shard_id, call,
+                                   on_timeout=lambda node: self._repair_after_timeout(shard_id, node, key))
         if r.status_code == 404:
             raise NotFound(f"Key {key} not found")
         if r.status_code == 409:

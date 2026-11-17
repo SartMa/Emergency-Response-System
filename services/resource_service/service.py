@@ -30,7 +30,7 @@ class ResourceService:
 
     async def register(self, body: RegisterResource) -> tuple[Resource, int]:
         res = domain.new_resource(body)
-        version = await self.storage.put(resource_key(res.id), res.model_dump(mode="json"), expected_version=0)
+        version = await self.storage.create(resource_key(res.id), res.model_dump(mode="json"))
         await self._announce_supply("resource.registered", res)
         return res, version
 

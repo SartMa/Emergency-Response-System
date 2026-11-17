@@ -59,7 +59,7 @@ class RequestService:
         Returns (request, version, queued). If RabbitMQ is down the request is still stored and
         the client still gets 201 with queued=false (NFR-11)."""
         req = domain.new_request(body)
-        version = await self.storage.put(request_key(req.id), req.model_dump(mode="json"), expected_version=0)
+        version = await self.storage.create(request_key(req.id), req.model_dump(mode="json"))
         queued = await self.publish_match(req)
         return req, version, queued
 
