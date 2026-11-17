@@ -24,7 +24,8 @@ load=$!
 
 step "Watch the autoscaler (every 10 s for ~2 minutes; CPU is averaged, so it reacts after 15-30 s)"
 for _ in $(seq 1 12); do
-  line=$($K get hpa matching-service --no-headers | awk '{print "targets " $3 ", replicas " $6}')
+  # jsonpath, not column parsing: newer kubectl prints TARGETS as "cpu: 12%/50%" (with a space)
+  line=$($K get hpa matching-service -o jsonpath='cpu {.status.currentMetrics[0].resource.current.averageUtilization}% of target 50%, desired replicas {.status.desiredReplicas}')
   pods=$($K get pods -l app=matching-service --no-headers | grep -c Running || true)
   echo "   $(date +%H:%M:%S)  $line  (running pods: $pods)"
   sleep 10
