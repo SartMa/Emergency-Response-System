@@ -1,10 +1,19 @@
 """RabbitMQ adapter: topology, publishing and consuming (DESIGN.md §6.1, ADR-10).
 
-Topology (Tier 1):
+Topology:
 
   erm.commands (direct) --match.request--> matching.q   [durable, x-max-priority=5, DLX=erm.dlx]
-  erm.events   (topic)  --request.cancelled--> resource.release.q   [DLX=erm.dlx]
+  erm.retry    (direct) --retry.<N>s--> matching.retry.<N>s   [x-message-ttl=N s, dead-letters back
+                                                                to erm.commands/match.request]
+  erm.events   (topic)  --request.cancelled--> resource.release.q          [DLX=erm.dlx]
+                        --resource.registered|restocked|released--> matching.wakeup.q  [DLX=erm.dlx]
   erm.dlx      (fanout) --> erm.dlq   (poison messages, inspected by hand)
+
+Delayed retry (FR-19) uses ONE QUEUE PER DELAY, each with a queue-level TTL. A message waits in
+matching.retry.8s for 8 s, expires, and RabbitMQ dead-letters it back onto matching.q. Why not
+one retry queue with a per-message TTL? RabbitMQ only expires messages at the HEAD of a queue,
+so a 2 s retry queued behind a 32 s one would wait 32 s (head-of-line blocking). With one queue
+per delay, every message in a queue has the same TTL, so the head always expires first.
 
 Every service declares the whole topology on startup. Declarations are idempotent, so the
 start order of the services does not matter.
@@ -31,13 +40,27 @@ log = logging.getLogger("amqp")
 COMMANDS_EXCHANGE = "erm.commands"
 EVENTS_EXCHANGE = "erm.events"
 DLX_EXCHANGE = "erm.dlx"
+RETRY_EXCHANGE = "erm.retry"
 
 MATCH_ROUTING_KEY = "match.request"
 MATCHING_QUEUE = "matching.q"
 RELEASE_QUEUE = "resource.release.q"
+WAKEUP_QUEUE = "matching.wakeup.q"
 DEAD_LETTER_QUEUE = "erm.dlq"
 
 MAX_PRIORITY = 5  # urgency 1..5 maps directly onto message priority (FR-16)
+
+# Backoff schedule for "no resource right now" (FR-19): exponential, ~1 minute in total.
+# Queue names contain the delay, so changing this list creates new queues instead of clashing
+# with the arguments of existing ones (RabbitMQ refuses to redeclare a queue with new arguments).
+RETRY_DELAYS_S = (2, 4, 8, 16, 32)
+
+# Supply changes that can turn an UNMATCHED request into a matchable one (wake-up).
+SUPPLY_EVENTS = ("resource.registered", "resource.restocked", "resource.released")
+
+
+def retry_routing_key(delay_s: int) -> str:
+    return f"retry.{delay_s}s"
 
 Handler = Callable[[dict], Awaitable[None]]
 
@@ -64,6 +87,27 @@ async def declare_topology(channel: aio_pika.abc.AbstractChannel) -> None:
         RELEASE_QUEUE, durable=True, arguments={"x-dead-letter-exchange": DLX_EXCHANGE}
     )
     await release_q.bind(events, routing_key="request.cancelled")
+
+    # Delayed retries: one queue per delay; expired messages go back to matching.q.
+    retry = await channel.declare_exchange(RETRY_EXCHANGE, aio_pika.ExchangeType.DIRECT, durable=True)
+    for delay in RETRY_DELAYS_S:
+        q = await channel.declare_queue(
+            f"matching.retry.{delay}s",
+            durable=True,
+            arguments={
+                "x-message-ttl": delay * 1000,
+                "x-dead-letter-exchange": COMMANDS_EXCHANGE,
+                "x-dead-letter-routing-key": MATCH_ROUTING_KEY,
+            },
+        )
+        await q.bind(retry, routing_key=retry_routing_key(delay))
+
+    # Wake-up: matching hears about new or freed supply.
+    wakeup_q = await channel.declare_queue(
+        WAKEUP_QUEUE, durable=True, arguments={"x-dead-letter-exchange": DLX_EXCHANGE}
+    )
+    for key in SUPPLY_EVENTS:
+        await wakeup_q.bind(events, routing_key=key)
 
 
 class AmqpClient:

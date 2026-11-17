@@ -1,19 +1,27 @@
-"""matching-service: consumes `match.request` from RabbitMQ and serves POST /match/{requestId}.
+"""matching-service: consumes `match.request` and supply events from RabbitMQ, and serves
+POST /match/{requestId}.
 
 Stateless, so it scales horizontally: every pod consumes from the same queue and RabbitMQ
 hands each message to exactly one of them (Competing Consumers, DDIA ch. 12 "load balancing").
+
+Retries and wake-ups (FR-19, rules in policies.py):
+  * no resource -> the command is re-published to erm.retry with a growing delay
+  * a resource is registered / restocked / freed -> nearby UNMATCHED requests of that type
+    get one more attempt
 """
 
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from services.common.amqp import MATCHING_QUEUE, AmqpClient
+from services.common.amqp import (COMMANDS_EXCHANGE, MATCH_ROUTING_KEY, MATCHING_QUEUE, RETRY_DELAYS_S,
+                                  RETRY_EXCHANGE, WAKEUP_QUEUE, AmqpClient, PermanentError, retry_routing_key)
 from services.common.config import env_float, env_int, env_str
 from services.common.errors import Conflict, NotFound
 from services.common.http import setup_app
 from services.common.logging import setup_logging
 from services.matching_service.clients import RequestServiceClient, ResourceServiceClient
+from services.matching_service.policies import WaitingRequest, next_retry_delay, select_for_wakeup
 from services.matching_service.saga import MatchingSaga
 from services.matching_service.strategies import get_strategy
 
@@ -23,18 +31,56 @@ strategy = get_strategy(env_str("MATCH_STRATEGY", "nearest"))
 saga = MatchingSaga(RequestServiceClient(), ResourceServiceClient(), strategy,
                     max_radius_km=env_float("MAX_RADIUS_KM", 50.0))
 broker = AmqpClient(prefetch=env_int("MATCHING_PREFETCH", 10))
+WAKEUP_BATCH = env_int("WAKEUP_BATCH", 50)
 
 
 async def on_match_command(message: dict) -> None:
     request_id = message.get("request_id")
+    attempt = int(message.get("attempt", 0))
     try:
         result = await saga.match(request_id)
-        log.info(f"match command done: {result.outcome}", extra={"fields": result.to_json()})
+        log.info(f"match command done: {result.outcome}", extra={"fields": {**result.to_json(), "attempt": attempt}})
     except NotFound:
         log.warning(f"request {request_id} does not exist; dropping message")
+        return
+
+    if result.outcome == "no_resource":
+        delay = next_retry_delay(attempt, RETRY_DELAYS_S)
+        if delay is None:
+            log.info(f"request {request_id}: retries used up; it stays UNMATCHED until new supply wakes it")
+            return
+        # If this publish fails, the handler raises Unavailable and the message is requeued:
+        # the saga runs again (idempotent) and we try to schedule the retry again.
+        await broker.publish(RETRY_EXCHANGE, retry_routing_key(delay), {**message, "attempt": attempt + 1},
+                             priority=int(message.get("urgency", 0)))
+        log.info(f"request {request_id}: no resource, retry {attempt + 1}/{len(RETRY_DELAYS_S)} in {delay}s")
+
+
+async def on_supply_event(event: dict) -> None:
+    """A resource appeared, was restocked, or got quantity back: give waiting requests of that
+    type near it one more attempt. The commands go through the normal queue, so they are spread
+    over all matching pods and handled by the same idempotent saga."""
+    type_ = event.get("type")
+    if not type_:
+        raise PermanentError(f"supply event without a type: {event}")
+    waiting = [
+        WaitingRequest(r["id"], r["type"], r["location"]["lat"], r["location"]["lon"], r["urgency"], r["created_at"])
+        for r in await saga.requests.list_unmatched(type_)
+    ]
+    chosen = select_for_wakeup(waiting, type_, event.get("lat"), event.get("lon"), saga.max_radius_km, WAKEUP_BATCH)
+    for r in chosen:
+        # attempt = budget used up: a wake-up is one extra chance, not a fresh 5-retry chain.
+        await broker.publish(COMMANDS_EXCHANGE, MATCH_ROUTING_KEY,
+                             {"request_id": r.id, "type": r.type, "urgency": r.urgency,
+                              "attempt": len(RETRY_DELAYS_S), "reason": "wake-up"},
+                             priority=r.urgency)
+    if chosen:
+        log.info(f"wake-up: {len(chosen)} waiting {type_} request(s) re-queued after {event.get('event', 'supply event')}",
+                 extra={"fields": {"resource_id": event.get("resource_id")}})
 
 
 broker.add_consumer(MATCHING_QUEUE, on_match_command)
+broker.add_consumer(WAKEUP_QUEUE, on_supply_event)
 
 
 @asynccontextmanager

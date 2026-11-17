@@ -43,6 +43,10 @@ class RequestServiceClient(_Client):
     async def mark_unmatched(self, request_id: str) -> dict:
         return await self.call("POST", f"/internal/requests/{request_id}/unmatched")
 
+    async def list_unmatched(self, type_: str) -> list[dict]:
+        body = await self.call("GET", "/requests", params={"status": "UNMATCHED", "type": type_})
+        return body["items"]
+
 
 class ResourceServiceClient(_Client):
     def __init__(self, base_url: str = RESOURCE_SERVICE_URL):

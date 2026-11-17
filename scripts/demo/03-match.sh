@@ -30,7 +30,16 @@ sleep 1
 out=$(call POST "/match/$far")
 echo "$out" | body_of | jq -c .error
 note "HTTP $(echo "$out" | status_of): NO_RESOURCE_AVAILABLE (nothing within 50 km)"
+note "Meanwhile the request is UNMATCHED and retried in the background (2, 4, 8, 16, 32 s)"
+pause
+
+step "Register a shelter nearby: nobody calls /match, the waiting request is woken up automatically"
 hall=$(new_resource shelter "School hall" 10.01 10.01 50)
-out=$(call POST "/match/$far")
-echo "$out" | body_of | jq .
-note "HTTP $(echo "$out" | status_of): matched after the shelter was registered"
+for _ in $(seq 1 20); do
+  st=$(call GET "/requests/$far" | body_of | jq -r .status)
+  [ "$st" = ASSIGNED ] && break
+  sleep 0.5
+done
+call GET "/requests/$far" | body_of | jq '{status, assignment, match_attempts}'
+note "resource.registered event -> matching-service woke up UNMATCHED shelter requests within 50 km"
+note "POST /match now answers $(call POST "/match/$far" | status_of) NOT_MATCHABLE: it is already assigned"
