@@ -27,9 +27,10 @@ chaos:           ## 2 min of traffic + random storage-node kills, then checks 6 
 	uv run python scripts/chaos.py --mode $${MODE:-k8s} --report chaos-report.json
 
 # ---------------------------------------------------------------- Kubernetes (minikube)
-k8s-start:       ## start minikube with enough resources + ingress addon
+k8s-start:       ## start minikube with enough resources + ingress and metrics-server (for the HPA) addons
 	minikube start --cpus=4 --memory=6g
 	minikube addons enable ingress
+	minikube addons enable metrics-server
 
 k8s-build:       ## build images on the host, then load them into minikube (any runtime; no registry)
 	for s in $(SERVICES); do \
