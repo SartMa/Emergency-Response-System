@@ -13,6 +13,7 @@ client → Ingress → request-service ─┐            ┌→ matching-service
 | Document | For |
 |---|---|
 | [`DESIGN.md`](DESIGN.md) | requirements, architecture, ADRs, design patterns |
+| [`HOW_IT_WORKS.md`](HOW_IT_WORKS.md) | the system under the hood, step by step, with viva Q&A |
 | [`HANDOVER.md`](HANDOVER.md) | status, how to run, demo runbook, what's left, viva notes |
 | [`CLAUDE.md`](CLAUDE.md) | coding rules and commands |
 

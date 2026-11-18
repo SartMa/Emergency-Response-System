@@ -5,7 +5,8 @@ Spec: `Emergency Response Matching-1.pdf`. Deadline: **2026-11-20**.
 
 ## Source of truth
 - **`DESIGN.md`** holds the requirements, architecture and ADRs (§10 lists post-freeze implementation notes). Read it before changing anything.
-- **`HANDOVER.md`** holds the current status, demo runbook and the remaining (Phase B) work.
+- **`HANDOVER.md`** holds the current status, demo runbook and the remaining work.
+- **`HOW_IT_WORKS.md`** explains the running system step by step: one request end to end, the storage tier, the saga, RabbitMQ, Kubernetes, failure scenarios, the chaos-found bugs and viva answers.
 - Design status: **FROZEN** (2026-11-16).
 - After the freeze, don't deviate from DESIGN.md silently. If something has to change, ask the user first, then update the relevant ADR.
 - The students must defend every choice in a viva. Keep code readable. Comments explain *why* and point to the decision (e.g. `# ADR-06: optimistic concurrency`). Avoid clever code.
@@ -53,3 +54,6 @@ Gotchas:
 - The coordinator must stay a single process (its cluster map is in memory). Never add uvicorn workers or replicas to it.
 - `kubectl logs -l ...` shows only 10 lines per pod unless you pass `--tail=-1`.
 - Port 8081 is used by another app on Sarthak's machine, which is why the dashboard uses 8090.
+- minikube's hostpath provisioner stores a volume in `/tmp/hostpath-provisioner/<namespace>/<claim name>` on the node and does NOT delete it when the namespace is deleted. A redeploy then reuses the old folders and comes back with all the old data. `make k8s-delete` removes them explicitly; don't replace it with a bare `kubectl delete namespace erm`.
+- Never run `pkill -f port-forward` (or similar) from a shell command whose own text contains that pattern: it kills the shell itself. Find the PID with `ps` and `kill <pid>`.
+- Port-forwards to `svc/coordinator` die whenever the coordinator pod restarts; reopen with `make k8s-dashboard`.

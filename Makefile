@@ -58,5 +58,8 @@ k8s-dashboard:   ## cluster dashboard on localhost:8090/dashboard (keep running)
 k8s-rabbitmq:    ## RabbitMQ management UI on localhost:15673 (user erm)
 	$(K) port-forward svc/rabbitmq 15673:15672
 
-k8s-delete:      ## remove everything from the cluster (including volumes)
+k8s-delete:      ## remove everything from the cluster AND wipe all stored data
 	kubectl delete namespace erm
+	# minikube's hostpath provisioner names a volume's folder after namespace + claim, and does not
+	# remove it: without this line the next deploy silently comes back with all the OLD data.
+	minikube ssh -- "sudo rm -rf /tmp/hostpath-provisioner/erm"

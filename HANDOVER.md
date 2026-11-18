@@ -55,7 +55,17 @@ Keep `http://localhost:8090/dashboard` visible next to the terminal the whole ti
 | 8 | `09-k8s-scale.sh` | K8s scaling | 4 pods share the queue roughly evenly |
 | 9 | `make chaos` (beyond the spec) | Proof under repeated failure | 2 min of random kills, then 6 checks print PASS; watch "copies identical" on the dashboard return after each kill |
 
-Start the demo with `00-seed-mumbai.sh` and the landing page at http://localhost:8080 (live map, needs internet). Creating a request from the page makes the map fly to it; a few seconds later its dot turns green with a dashed line to the resource serving it.
+**Open the frontend first** at http://localhost:8080 (live map, needs internet). It has four tabs:
+- **I need help**: pick what / how many / how urgent / where, press *Request help*. A tracker shows a 4-step progress bar, then "Help is on the way" with the helper's name and distance, and a dashed line on the map. Buttons: *Help has arrived*, *Cancel*, *Ask for something else*.
+- **I can help**: register an offer (a volunteer with 2 cans, an NGO with 60 meals, a depot). It appears on the map immediately, and waiting requests nearby are woken up and matched automatically.
+- **Live board**: live counters, a latest-activity feed, the map, and demo tools.
+- **System**: the storage dashboard embedded (needs `make k8s-dashboard` running).
+
+A good story for the demo: on the live board, show the Palghar request waiting ("No one nearby yet"). Then on *I can help* offer food near Palghar, and watch that request get matched by itself, with nobody pressing "match" (the wake-up from Tier 2).
+
+**Starting clean:** `make k8s-delete && make k8s-deploy`, reopen the two port-forwards, then `./scripts/demo/00-seed-mumbai.sh`. (`k8s-delete` now really wipes the data; before 2026-11-18 it silently left the old data behind, see CLAUDE.md gotchas.)
+
+To understand how everything fits together, read `HOW_IT_WORKS.md`.
 
 Demo 08 restarts the coordinator, so restart `make k8s-dashboard` after it.
 For a longer "during" window in demo 06 on Kubernetes, scale the StatefulSet instead of deleting a pod:
