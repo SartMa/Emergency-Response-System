@@ -18,12 +18,21 @@ The playbook ends by checking, from your machine, that `http://<ip>/` and the AP
 Re-run `make cloud-deploy` after committing changes: it deploys **what is committed** (`git archive HEAD`).
 
 ## 3. Use it
-- App: `http://<ip>/`
-- Storage dashboard (deliberately not public): `make cloud-dashboard`, then http://localhost:8090/dashboard
-- Shell: `make cloud-ssh`, then `sudo k3s kubectl -n erm get pods`
-- Demo scripts against the cloud: `GATEWAY=http://<ip> COORD=http://localhost:8090 ./scripts/demo/01-create-get.sh`
-  (with `make cloud-dashboard` running for COORD). Scripts that kill pods use local `kubectl`, so
-  run those on the VM or point kubectl at it.
+- App: `http://<ip>/` (public)
+- Shell on the VM: `make cloud-ssh`, then `sudo k3s kubectl -n erm get pods`
+- **Everything else from your laptop: `make cloud-tunnel`** (keep it running). It opens, through SSH only:
+  - `localhost:16443`: the cloud Kubernetes API, so your local `kubectl` can control the cloud cluster
+  - `localhost:8091`: the cloud storage dashboard (`/dashboard`); 8090 stays minikube's
+
+  and prints one `export KUBECONFIG=… GATEWAY=… COORD=…` line. Run it in another terminal, and the
+  existing demo scripts, integration tests and chaos test work against the cloud **unchanged**:
+  ```bash
+  NO_PAUSE=1 ./scripts/demo/06-storage-failure.sh
+  GATEWAY_URL=$GATEWAY COORDINATOR_URL=$COORD uv run pytest tests/integration
+  uv run python scripts/chaos.py --gateway $GATEWAY --coord $COORD
+  ```
+  Without that export, `kubectl` and the scripts keep talking to minikube.
+- Just the dashboard: `make cloud-dashboard`, then http://localhost:8091/dashboard
 
 ## What the roles do
 | Role | Does |
