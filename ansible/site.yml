@@ -1,0 +1,16 @@
+# One command deploys the whole system to a fresh Ubuntu VM:
+#   make cloud-deploy        (= cd ansible && uv run ansible-playbook site.yml)
+#
+# Roles, in order (each is safe to re-run; a second run only changes what changed):
+#   common      packages + Docker; opens the VM's own firewall (Oracle images block almost everything)
+#   k3s         single-node Kubernetes (k3s): bundles an Ingress (Traefik), metrics-server, storage
+#   app         ships the committed code, builds the 5 images ON the VM, applies our k8s/ manifests
+#   smoke_test  checks from YOUR machine that the app answers on the public IP
+- name: Deploy the Emergency Resource Matching system
+  hosts: erm
+  become: true
+  roles:
+    - common
+    - k3s
+    - app
+    - smoke_test

@@ -14,14 +14,3 @@ data:
   FORMING_GRACE_S: "5"
   MATCH_STRATEGY: nearest   # or: balanced (DESIGN.md §6.3)
   MAX_RADIUS_KM: "50"
----
-apiVersion: v1
-kind: Secret
-metadata:
-  name: rabbitmq-credentials
-  namespace: erm
-type: Opaque
-stringData:
-  username: erm
-  password: erm-demo-password
-  url: amqp://erm:erm-demo-password@rabbitmq:5672/

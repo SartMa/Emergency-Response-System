@@ -2,7 +2,7 @@
 SERVICES := coordinator storage_node request_service resource_service matching_service
 K := kubectl -n erm
 
-.PHONY: help test unit chaos up down logs k8s-start k8s-build k8s-deploy k8s-status k8s-gateway k8s-dashboard k8s-rabbitmq k8s-delete
+.PHONY: help test unit chaos up down logs k8s-start k8s-build k8s-deploy k8s-status k8s-gateway k8s-dashboard k8s-rabbitmq k8s-delete cloud-deploy cloud-dashboard cloud-ssh
 
 help:            ## list targets
 	@grep -E '^[a-z0-9-]+:.*##' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-15s %s\n", $$1, $$2}'
@@ -63,3 +63,16 @@ k8s-delete:      ## remove everything from the cluster AND wipe all stored data
 	# minikube's hostpath provisioner names a volume's folder after namespace + claim, and does not
 	# remove it: without this line the next deploy silently comes back with all the OLD data.
 	minikube ssh -- "sudo rm -rf /tmp/hostpath-provisioner/erm"
+
+# ---------------------------------------------------------------- cloud VM (Ansible + k3s; see ansible/README.md)
+# user@ip of the VM, read from ansible/inventory.ini
+CLOUD := $(shell awk '/ansible_host=/ {for (i = 1; i <= NF; i++) {split($$i, kv, "="); if (kv[1] == "ansible_host") h = kv[2]; if (kv[1] == "ansible_user") u = kv[2]}} END {if (h) print u "@" h}' ansible/inventory.ini 2>/dev/null)
+
+cloud-deploy:    ## deploy (or update) everything on the cloud VM in ansible/inventory.ini
+	cd ansible && LC_ALL=C.UTF-8 uv run ansible-playbook site.yml
+
+cloud-dashboard: ## storage dashboard of the cloud VM on localhost:8090/dashboard (SSH tunnel; keep running)
+	ssh -L 8090:localhost:8090 $(CLOUD) 'sudo k3s kubectl -n erm port-forward svc/coordinator 8090:8000'
+
+cloud-ssh:       ## open a shell on the cloud VM (then: sudo k3s kubectl -n erm get pods)
+	ssh $(CLOUD)

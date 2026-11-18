@@ -1,0 +1,100 @@
+# Ship the code, build the images on the VM, deploy our k8s/ manifests, wait until ready.
+
+- name: Package exactly what is committed in git (uncommitted local edits are NOT deployed)
+  delegate_to: localhost
+  become: false
+  run_once: true
+  ansible.builtin.shell: |
+    mkdir -p "{{ playbook_dir }}/build"
+    git -C "{{ playbook_dir }}/.." archive --format=tar.gz -o "{{ playbook_dir }}/build/erm.tar.gz" HEAD
+    git -C "{{ playbook_dir }}/.." rev-parse --short HEAD
+  register: git_commit
+  changed_when: true
+
+- name: Remove the previous copy of the code on the VM (deleted files must not linger)
+  ansible.builtin.file:
+    path: "{{ app_dir }}"
+    state: absent
+
+- name: Create the app directory
+  ansible.builtin.file:
+    path: "{{ app_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: Unpack the code on the VM
+  ansible.builtin.unarchive:
+    src: "{{ playbook_dir }}/build/erm.tar.gz"
+    dest: "{{ app_dir }}"
+
+# Building on the VM means: no image registry or Docker Hub account needed, and the images
+# are automatically built for the VM's CPU (ARM on Oracle's free tier).
+- name: Build the service images on the VM (a few minutes the first time, cached after)
+  ansible.builtin.command: docker build -q --build-arg SERVICE={{ item }} -t erm/{{ item }}:dev {{ app_dir }}
+  loop: "{{ erm_services }}"
+  changed_when: true
+
+- name: Load the images into k3s (k3s runs containerd, not Docker; our manifests use imagePullPolicy Never)
+  ansible.builtin.shell: set -o pipefail && docker save erm/{{ item }}:dev | k3s ctr -n k8s.io images import -
+  args:
+    executable: /bin/bash
+  loop: "{{ erm_services }}"
+  changed_when: true
+
+- name: Namespace
+  ansible.builtin.command: k3s kubectl apply -f {{ app_dir }}/k8s/00-namespace.yaml
+  changed_when: true
+
+# Must exist BEFORE RabbitMQ first starts: RabbitMQ creates its user from it on first boot.
+- name: RabbitMQ credentials with the generated password (instead of the demo k8s/02-secret.yaml)
+  ansible.builtin.shell: |
+    set -o pipefail
+    k3s kubectl -n erm create secret generic rabbitmq-credentials \
+      --from-literal=username={{ rabbitmq_user }} \
+      --from-literal=password={{ rabbitmq_password }} \
+      --from-literal=url=amqp://{{ rabbitmq_user }}:{{ rabbitmq_password }}@rabbitmq:5672/ \
+      --dry-run=client -o yaml | k3s kubectl apply -f -
+  args:
+    executable: /bin/bash
+  no_log: true  # keeps the password out of the output
+  changed_when: true
+
+- name: Apply our manifests (same files as on minikube)
+  ansible.builtin.command: k3s kubectl apply -f {{ app_dir }}/k8s/{{ item }}
+  loop: [01-config.yaml, 10-rabbitmq.yaml, 20-coordinator.yaml, 30-storage.yaml, 40-services.yaml, 60-hpa.yaml]
+  changed_when: true
+
+- name: Ingress, switched to k3s's Ingress controller (Traefik instead of minikube's nginx)
+  ansible.builtin.shell: >
+    set -o pipefail &&
+    sed 's/ingressClassName: nginx/ingressClassName: traefik/' {{ app_dir }}/k8s/50-ingress.yaml
+    | k3s kubectl apply -f -
+  args:
+    executable: /bin/bash
+  changed_when: true
+
+# The image tag stays ":dev", so Kubernetes can't tell new code from old: restart explicitly.
+# Storage nodes restart one at a time (StatefulSet rolling update); the coordinator fails over.
+- name: Restart everything so the freshly built images are used
+  ansible.builtin.command: >
+    k3s kubectl -n erm rollout restart
+    deployment/coordinator deployment/request-service deployment/resource-service deployment/matching-service
+    statefulset/shard-0 statefulset/shard-1 statefulset/shard-2
+  changed_when: true
+
+- name: Wait until everything is rolled out and ready
+  ansible.builtin.command: k3s kubectl -n erm rollout status {{ item }} --timeout=300s
+  loop:
+    - statefulset/rabbitmq
+    - deployment/coordinator
+    - statefulset/shard-0
+    - statefulset/shard-1
+    - statefulset/shard-2
+    - deployment/request-service
+    - deployment/resource-service
+    - deployment/matching-service
+  changed_when: false
+
+- name: Deployed commit
+  ansible.builtin.debug:
+    msg: "Deployed commit {{ git_commit.stdout_lines[-1] }}"

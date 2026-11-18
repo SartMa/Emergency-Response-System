@@ -1,0 +1,36 @@
+# Base packages, Docker (to build our images on the VM), and the VM's own firewall.
+
+- name: Install packages (Docker builds the service images on the VM itself)
+  ansible.builtin.apt:
+    name: [docker.io, curl, jq]
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Docker is running and starts on boot
+  ansible.builtin.service:
+    name: docker
+    state: started
+    enabled: true
+
+# Oracle Cloud's Ubuntu images ship iptables rules that REJECT everything except SSH, in both
+# INPUT (blocks port 80) and FORWARD (breaks Kubernetes pod networking). The cloud-level
+# firewall (the VCN security list, which opens only 22 and 80) still protects the VM, so we
+# drop the OS-level blanket REJECTs: from the saved rules file and from the live rules.
+- name: Look for Oracle's saved iptables rules
+  ansible.builtin.stat:
+    path: /etc/iptables/rules.v4
+  register: saved_rules
+
+- name: Remove the blanket REJECT rules from the saved rules (persists across reboots)
+  ansible.builtin.lineinfile:
+    path: /etc/iptables/rules.v4
+    regexp: "-j REJECT --reject-with icmp-host-prohibited"
+    state: absent
+  when: saved_rules.stat.exists
+
+- name: Remove the blanket REJECT rules from the live firewall
+  ansible.builtin.command: iptables -D {{ item }} -j REJECT --reject-with icmp-host-prohibited
+  loop: [INPUT, FORWARD]
+  register: delete_rule
+  changed_when: delete_rule.rc == 0
+  failed_when: false  # absent already (or not an Oracle image): nothing to do

@@ -1,0 +1,26 @@
+# Single-node Kubernetes with k3s. It bundles what minikube gave us through addons:
+#   - Traefik as the Ingress controller (minikube: ingress-nginx addon)
+#   - metrics-server, so the HPA works (minikube: metrics-server addon)
+#   - local-path storage, so the StatefulSets' PersistentVolumeClaims bind
+# It runs on ARM (Oracle's free VMs) and x86 alike.
+
+- name: Install k3s (official installer; skipped if already installed)
+  ansible.builtin.shell: >
+    curl -sfL https://get.k3s.io |
+    INSTALL_K3S_CHANNEL={{ k3s_channel }}
+    {% if k3s_version %}INSTALL_K3S_VERSION={{ k3s_version }}{% endif %}
+    sh -s - --write-kubeconfig-mode 644
+  args:
+    creates: /usr/local/bin/k3s
+
+- name: Wait until the Kubernetes node is Ready
+  ansible.builtin.command: k3s kubectl wait --for=condition=Ready node --all --timeout=180s
+  changed_when: false
+
+- name: Wait until k3s's Ingress controller (Traefik) is deployed
+  ansible.builtin.command: k3s kubectl -n kube-system rollout status deployment/traefik --timeout=300s
+  register: traefik
+  retries: 10  # the deployment is created by a helm job a little after the node is ready
+  delay: 10
+  until: traefik.rc == 0
+  changed_when: false

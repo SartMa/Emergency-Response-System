@@ -1,0 +1,18 @@
+# Settings for the cloud deployment. See ansible/README.md.
+
+# Where the code is unpacked on the VM.
+app_dir: /opt/erm
+
+# k3s release channel ("stable" = latest stable release). Set k3s_version (e.g. "v1.31.4+k3s1")
+# to pin an exact version instead.
+k3s_channel: stable
+k3s_version: ""
+
+# The five images built on the VM (same Dockerfile, one SERVICE build arg each).
+erm_services: [coordinator, storage_node, request_service, resource_service, matching_service]
+
+# RabbitMQ credentials. The password is generated once on YOUR machine and stored in
+# ansible/credentials/ (git-ignored), so it is never in git and stays the same across re-deploys.
+# (The demo password in k8s/02-secret.yaml is only for local minikube.)
+rabbitmq_user: erm
+rabbitmq_password: "{{ lookup('ansible.builtin.password', playbook_dir + '/credentials/rabbitmq_password', length=24, chars=['ascii_letters', 'digits']) }}"

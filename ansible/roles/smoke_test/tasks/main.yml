@@ -1,0 +1,30 @@
+# Checked from YOUR machine, over the internet: this proves both firewalls (Oracle's security
+# list and the VM's iptables) and the Ingress are right, not just that the pods run.
+
+- name: Landing page answers on the public IP
+  delegate_to: localhost
+  become: false
+  ansible.builtin.uri:
+    url: "http://{{ ansible_host }}/"
+    status_code: 200
+  register: landing
+  retries: 20
+  delay: 6
+  until: landing.status == 200
+
+- name: API answers on the public IP
+  delegate_to: localhost
+  become: false
+  ansible.builtin.uri:
+    url: "http://{{ ansible_host }}/requests?limit=1"
+    status_code: 200
+  register: api
+  retries: 10
+  delay: 6
+  until: api.status == 200
+
+- name: Where to find it
+  ansible.builtin.debug:
+    msg:
+      - "Live: http://{{ ansible_host }}/"
+      - "Storage dashboard (kept private): make cloud-dashboard, then open http://localhost:8090/dashboard"
