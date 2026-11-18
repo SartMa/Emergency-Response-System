@@ -4,374 +4,741 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Emergency Resource Matching</title>
-<!-- Map library (needs internet at demo time, as do the map tiles; the page works without it). -->
+<!-- Map library: needs internet at demo time (as do the map tiles). Without it the page still works
+     with the "demo neighbourhood" picker; only the map is replaced by a notice. -->
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <style>
   :root {
-    --bg: #f5f6f8; --card: #ffffff; --text: #1b2130; --muted: #667085; --border: #e2e5ea;
-    --accent: #c2410c; --accent-bg: #fff1e8; --accent-text: #ffffff;
-    --ok: #15803d; --ok-bg: #dcfce7; --warn: #a16207; --warn-bg: #fef3c7;
-    --bad: #b91c1c; --bad-bg: #fee2e2; --info: #1d4ed8; --info-bg: #dbeafe; --idle-bg: #eef0f3;
+    --bg: #f4f6f8; --card: #ffffff; --text: #18202e; --muted: #667085; --border: #e1e5ea;
+    --accent: #0f766e; --accent-hover: #115e59; --accent-text: #ffffff; --accent-soft: #e6f4f2;
+    --info: #1d4ed8; --info-bg: #dbeafe; --ok: #15803d; --ok-bg: #dcfce7;
+    --warn: #a16207; --warn-bg: #fef3c7; --bad: #b91c1c; --bad-bg: #fee2e2; --idle: #667085; --idle-bg: #eceff3;
+    --shadow: 0 1px 2px rgba(16,24,40,.06), 0 4px 12px rgba(16,24,40,.06);
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      --bg: #0f1218; --card: #181c24; --text: #e6e8ec; --muted: #9aa3b2; --border: #2a303b;
-      --accent: #fb923c; --accent-bg: #2b1a0e; --accent-text: #1b1206;
-      --ok: #4ade80; --ok-bg: #14301f; --warn: #fbbf24; --warn-bg: #33290f;
-      --bad: #f87171; --bad-bg: #3a1717; --info: #93c5fd; --info-bg: #172544; --idle-bg: #232935;
+      --bg: #0e1218; --card: #171c25; --text: #e7e9ee; --muted: #9aa3b2; --border: #2a303b;
+      --accent: #2dd4bf; --accent-hover: #5eead4; --accent-text: #06201d; --accent-soft: #10302d;
+      --info: #93c5fd; --info-bg: #172544; --ok: #4ade80; --ok-bg: #14301f;
+      --warn: #fbbf24; --warn-bg: #33290f; --bad: #f87171; --bad-bg: #3a1717; --idle: #9aa3b2; --idle-bg: #232935;
+      --shadow: 0 1px 2px rgba(0,0,0,.4);
     }
   }
   * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--text);
-         font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; }
-  main { max-width: 1080px; margin: 0 auto; padding: 0 16px 56px; }
-  header { padding: 44px 0 8px; }
-  .eyebrow { color: var(--accent); font-weight: 700; font-size: 12px; letter-spacing: .09em; text-transform: uppercase; }
-  h1 { font-size: clamp(26px, 5vw, 38px); line-height: 1.15; margin: 8px 0 12px; text-wrap: balance; }
-  .lede { color: var(--muted); max-width: 64ch; font-size: 16px; margin: 0; }
-  h2 { font-size: 20px; margin: 44px 0 4px; }
-  .sub { color: var(--muted); margin: 0 0 16px; max-width: 70ch; }
-  .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
-  .grid { display: grid; gap: 12px; }
-  .g2 { grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
-  .g3 { grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); }
-  .g4 { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+  [hidden] { display: none !important; }
+  html, body { height: 100%; }
+  body { margin: 0; background: var(--bg); color: var(--text); display: flex; flex-direction: column;
+         font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  button, input, select { font: inherit; color: inherit; }
+  button { cursor: pointer; }
+  :focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
 
-  /* flow */
-  .flow { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; counter-reset: step; }
-  .flow .card { position: relative; padding-top: 34px; }
-  .flow .card::before { counter-increment: step; content: counter(step); position: absolute; top: 10px; left: 14px;
-    width: 20px; height: 20px; border-radius: 50%; background: var(--accent); color: var(--accent-text);
-    font-size: 12px; font-weight: 700; display: grid; place-items: center; }
-  .flow b { display: block; }
-  .flow span { color: var(--muted); font-size: 13px; }
+  /* ---------- header ---------- */
+  header { background: var(--card); border-bottom: 1px solid var(--border); padding: 10px 16px;
+           display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+  .brand { font-weight: 800; font-size: 16px; letter-spacing: -.01em; white-space: nowrap; }
+  .brand small { display: block; font-weight: 500; color: var(--muted); font-size: 12px; letter-spacing: 0; }
+  nav { display: flex; gap: 4px; background: var(--idle-bg); padding: 4px; border-radius: 12px; margin: 0 auto 0 8px; }
+  nav button { border: 0; background: transparent; padding: 8px 14px; border-radius: 9px; font-weight: 600; color: var(--muted); white-space: nowrap; }
+  nav button[aria-selected=true] { background: var(--card); color: var(--text); box-shadow: var(--shadow); }
+  .conn { font-size: 13px; color: var(--muted); display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+  .conn i { width: 9px; height: 9px; border-radius: 50%; background: var(--ok); }
+  .conn.off i { background: var(--bad); }
+  #banner { background: var(--warn-bg); color: var(--warn); text-align: center; padding: 8px 16px; font-weight: 600; font-size: 14px; }
 
-  /* stats */
-  .stat .n { font-size: 28px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.1; }
-  .stat .l { color: var(--muted); font-size: 13px; }
-
-  /* forms */
-  form { display: grid; gap: 10px; }
-  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-  label { font-size: 12px; font-weight: 600; color: var(--muted); display: grid; gap: 4px; }
-  select, input { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--border);
-                  border-radius: 8px; padding: 8px 10px; width: 100%; min-width: 0; }
-  button { font: inherit; font-weight: 600; border: 0; border-radius: 8px; padding: 10px 14px; cursor: pointer;
-           background: var(--accent); color: var(--accent-text); }
-  button.ghost { background: transparent; color: var(--muted); border: 1px solid var(--border); padding: 3px 9px; font-size: 12px; }
-  button:disabled { opacity: .6; cursor: default; }
-  h3 { margin: 0 0 10px; font-size: 15px; }
-  .result { font-size: 13px; color: var(--muted); min-height: 20px; }
-  .result.err { color: var(--bad); }
-
-  /* table */
-  .scroll { overflow-x: auto; }
-  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
-  th { text-align: left; color: var(--muted); font-size: 12px; font-weight: 600; padding: 6px 10px 6px 0; white-space: nowrap; }
-  td { padding: 8px 10px 8px 0; border-top: 1px solid var(--border); vertical-align: middle; white-space: nowrap; }
-  code, .mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12.5px; }
-  .b { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; }
-  .PENDING, .IN_PROGRESS { color: var(--info); background: var(--info-bg); }
-  .ASSIGNED, .FULFILLED, .AVAILABLE { color: var(--ok); background: var(--ok-bg); }
-  .UNMATCHED, .EXHAUSTED { color: var(--warn); background: var(--warn-bg); }
-  .CANCELLED, .OFFLINE { color: var(--muted); background: var(--idle-bg); }
-  .muted { color: var(--muted); }
-  .feature b { display: block; margin-bottom: 2px; }
-  .feature span { color: var(--muted); font-size: 13.5px; }
-  .links a { color: var(--accent); font-weight: 600; text-decoration: none; margin-right: 18px; white-space: nowrap; }
-  .links a:hover { text-decoration: underline; }
-  footer { color: var(--muted); font-size: 13px; margin-top: 40px; }
-
-  /* map */
-  .map-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
-  .map-head h3 { margin: 0; }
-  #map { height: 440px; border-radius: 10px; border: 1px solid var(--border); background: var(--bg); z-index: 0; }
-  #map.off { display: grid; place-items: center; color: var(--muted); text-align: center; padding: 16px; }
-  .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12.5px; color: var(--muted); margin-top: 10px; }
-  .legend i { display: inline-block; width: 10px; height: 10px; margin-right: 5px; vertical-align: -1px; }
-  .legend .sq { border-radius: 2px; } .legend .dot { border-radius: 50%; }
-  .res-pin { color: #fff; font: 700 11px/20px system-ui, sans-serif; text-align: center; border-radius: 5px;
-             border: 2px solid #fff; box-shadow: 0 1px 4px rgba(0,0,0,.35); }
-  .pick-pin { width: 14px; height: 14px; border-radius: 50%; background: var(--accent); border: 3px solid #fff;
-              box-shadow: 0 0 0 2px var(--accent); }
-  .leaflet-tooltip { font: 12.5px/1.4 system-ui, sans-serif; }
-  .osm-tiles { filter: saturate(.55) contrast(.95); }  /* calmer basemap so our pins stand out */
-  @media (prefers-color-scheme: dark) {
-    .osm-tiles { filter: invert(1) hue-rotate(180deg) brightness(.85) contrast(.9) saturate(.4); }
+  /* ---------- layout ---------- */
+  .layout { flex: 1; min-height: 0; display: grid; grid-template-columns: 430px minmax(0, 1fr); }
+  .layout.full { grid-template-columns: minmax(0, 1fr); }
+  .layout.full .mapwrap { display: none; }
+  .panel { min-width: 0; overflow-y: auto; padding: 18px 18px 40px; background: var(--bg); border-right: 1px solid var(--border); }
+  .layout.full .panel { border: 0; padding: 0; }
+  .mapwrap { position: relative; min-height: 0; }
+  #map { position: absolute; inset: 0; background: var(--idle-bg); z-index: 0; }
+  #map.off { display: grid; place-items: center; color: var(--muted); text-align: center; padding: 24px; }
+  .maptools { position: absolute; top: 10px; right: 10px; z-index: 500; display: flex; gap: 6px; }
+  .maptools button { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; font-size: 13px; font-weight: 600; box-shadow: var(--shadow); }
+  .legend { position: absolute; left: 10px; bottom: 10px; z-index: 500; background: var(--card); border: 1px solid var(--border);
+            border-radius: 10px; padding: 8px 12px; font-size: 12px; color: var(--muted); box-shadow: var(--shadow);
+            display: flex; gap: 12px; flex-wrap: wrap; max-width: calc(100% - 20px); }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 5px; vertical-align: -1px; }
+  .legend i.sq { border-radius: 3px; }
+  @media (max-width: 860px) {
+    .layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 52vh; overflow-y: auto; }   /* minmax(0,..): let long text wrap instead of widening the page */
+    .panel { border-right: 0; overflow: visible; }
+    .mapwrap { min-height: 52vh; }
+    nav { order: 3; width: 100%; margin: 0; overflow-x: auto; }
+    nav button { flex: 1; padding: 8px 4px; font-size: 13px; }
+    #toasts { top: 138px; }
+    body { height: auto; min-height: 100%; }
+    html { height: auto; }
+    .layout.full { grid-template-rows: auto; }
   }
-  @media (max-width: 420px) { .row { grid-template-columns: 1fr; } }
+
+  /* ---------- panel content ---------- */
+  h1 { font-size: 22px; line-height: 1.2; margin: 0 0 4px; letter-spacing: -.01em; }
+  h2 { font-size: 15px; margin: 22px 0 8px; }
+  .lede { color: var(--muted); margin: 0 0 16px; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 16px; box-shadow: var(--shadow); }
+  .card + .card { margin-top: 12px; }
+  .label { display: block; font-size: 13px; font-weight: 700; margin: 18px 0 8px; }
+  .label:first-child { margin-top: 0; }
+  .label small { font-weight: 500; color: var(--muted); }
+  .muted { color: var(--muted); }
+  .how { margin: 0 0 14px; font-size: 13.5px; color: var(--muted); }
+  .how summary { cursor: pointer; font-weight: 600; color: var(--text); }
+  .how ol { margin: 8px 0 0; padding-left: 20px; }
+
+  .tiles { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+  .tile { border: 2px solid var(--border); background: var(--card); border-radius: 12px; padding: 10px 2px 8px;
+          display: flex; flex-direction: column; align-items: center; gap: 2px; font-size: 11.5px; font-weight: 600; color: var(--muted); }
+  .tile span { font-size: 26px; line-height: 1.1; }
+  .tile[aria-pressed=true] { border-color: var(--accent); background: var(--accent-soft); color: var(--text); }
+  .seg { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 6px; }
+  .seg button { border: 2px solid var(--border); background: var(--card); border-radius: 10px; padding: 9px 4px; font-weight: 600; font-size: 14px; color: var(--muted); }
+  .seg button[aria-pressed=true] { border-color: var(--accent); background: var(--accent-soft); color: var(--text); }
+  .seg button.urgent[aria-pressed=true] { border-color: var(--bad); background: var(--bad-bg); color: var(--bad); }
+  .stepper { display: inline-flex; align-items: center; border: 2px solid var(--border); border-radius: 12px; background: var(--card); overflow: hidden; }
+  .stepper button { border: 0; background: transparent; width: 46px; height: 44px; font-size: 22px; font-weight: 700; color: var(--accent); }
+  .stepper button:hover { background: var(--accent-soft); }
+  .stepper input { width: 70px; text-align: center; border: 0; background: transparent; font-weight: 700; font-size: 18px; -moz-appearance: textfield; }
+  .stepper input::-webkit-outer-spin-button, .stepper input::-webkit-inner-spin-button { -webkit-appearance: none; }
+  input[type=text], select { width: 100%; border: 2px solid var(--border); background: var(--card); border-radius: 10px; padding: 10px 12px; }
+  .loc { border: 2px dashed var(--border); border-radius: 12px; padding: 12px; background: var(--card); }
+  .loc.set { border-style: solid; border-color: var(--accent); background: var(--accent-soft); }
+  .loc .where { font-weight: 600; margin-bottom: 8px; }
+  .loc .row { display: flex; gap: 8px; }
+  .loc .row > * { flex: 1; min-width: 0; }
+  .btn { border: 0; border-radius: 12px; padding: 13px 16px; font-weight: 700; font-size: 16px; background: var(--accent); color: var(--accent-text); width: 100%; }
+  .btn:hover:not(:disabled) { background: var(--accent-hover); }
+  .btn:disabled { opacity: .5; cursor: not-allowed; }
+  .btn.alert { background: var(--bad); color: #fff; }
+  .btn.secondary { background: var(--card); color: var(--text); border: 2px solid var(--border); }
+  .btn.small { width: auto; padding: 7px 12px; font-size: 13.5px; border-radius: 9px; }
+  .nearby { margin-top: 10px; padding: 10px 12px; border-radius: 10px; font-size: 13.5px; font-weight: 600; }
+  .nearby:empty { display: none; }
+  .hint { font-size: 13px; color: var(--muted); margin: 8px 0 0; text-align: center; min-height: 20px; }
+  .hint.err { color: var(--bad); font-weight: 600; }
+
+  /* ---------- tracker ---------- */
+  .banner-status { border-radius: 14px; padding: 16px; display: flex; gap: 14px; align-items: flex-start; }
+  .banner-status .ico { font-size: 34px; line-height: 1; }
+  .banner-status h2 { margin: 0 0 2px; font-size: 18px; }
+  .banner-status p { margin: 0; font-size: 14px; }
+  .tone-info { background: var(--info-bg); color: var(--info); } .tone-ok { background: var(--ok-bg); color: var(--ok); }
+  .tone-warn { background: var(--warn-bg); color: var(--warn); } .tone-idle { background: var(--idle-bg); color: var(--idle); }
+  .spin { display: inline-block; animation: spin 1.6s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .steps { display: flex; list-style: none; padding: 0; margin: 18px 0 6px; }
+  .steps li { flex: 1; text-align: center; font-size: 12px; color: var(--muted); position: relative; padding-top: 24px; }
+  .steps li::before { content: ""; position: absolute; top: 5px; left: 50%; width: 14px; height: 14px; margin-left: -7px; border-radius: 50%;
+                      background: var(--card); border: 3px solid var(--border); z-index: 1; }
+  .steps li::after { content: ""; position: absolute; top: 11px; left: -50%; width: 100%; height: 3px; background: var(--border); }
+  .steps li:first-child::after { display: none; }
+  .steps li.done { color: var(--text); font-weight: 600; } .steps li.done::before { background: var(--accent); border-color: var(--accent); } .steps li.done::after { background: var(--accent); }
+  .steps li.now::before { border-color: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
+  .facts { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; margin: 14px 0; font-size: 14px; }
+  .facts dt { color: var(--muted); } .facts dd { margin: 0; font-weight: 600; }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  .actions .btn { flex: 1; }
+  .timeline { margin: 8px 0 0; padding: 0; list-style: none; font-size: 13px; }
+  .timeline li { display: flex; gap: 10px; padding: 4px 0; } .timeline time { color: var(--muted); min-width: 70px; font-variant-numeric: tabular-nums; }
+  details.tl summary { cursor: pointer; font-weight: 600; font-size: 13.5px; margin-top: 12px; }
+
+  /* ---------- lists ---------- */
+  .item { display: flex; gap: 12px; align-items: center; padding: 10px 0; border-top: 1px solid var(--border); }
+  .item:first-child { border-top: 0; }
+  .item .ico { font-size: 24px; width: 34px; text-align: center; }
+  .item .main { flex: 1; min-width: 0; }
+  .stats > *, .card { min-width: 0; } .item .main b { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .item .main span { font-size: 13px; color: var(--muted); }
+  .pill { font-size: 11px; font-weight: 700; padding: 3px 9px; border-radius: 999px; white-space: nowrap; }
+  .pill.PENDING, .pill.IN_PROGRESS { color: var(--info); background: var(--info-bg); }
+  .pill.ASSIGNED, .pill.FULFILLED, .pill.AVAILABLE { color: var(--ok); background: var(--ok-bg); }
+  .pill.UNMATCHED, .pill.EXHAUSTED { color: var(--warn); background: var(--warn-bg); }
+  .pill.CANCELLED, .pill.OFFLINE { color: var(--idle); background: var(--idle-bg); }
+  button.item { width: 100%; text-align: left; background: transparent; border: 0; border-top: 1px solid var(--border); }
+  button.item:first-child { border-top: 0; } button.item:hover { background: var(--accent-soft); }
+  .bar { height: 8px; background: var(--idle-bg); border-radius: 99px; overflow: hidden; margin: 6px 0 4px; }
+  .bar i { display: block; height: 100%; background: var(--accent); border-radius: 99px; transition: width .4s; }
+  .offer { padding: 12px 0; border-top: 1px solid var(--border); } .offer:first-child { border-top: 0; }
+  .offer .head { display: flex; gap: 10px; align-items: center; } .offer .head b { flex: 1; }
+  .offer .acts { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+  .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .stat { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; box-shadow: var(--shadow); }
+  .stat b { display: block; font-size: 26px; line-height: 1.1; font-variant-numeric: tabular-nums; } .stat span { font-size: 12.5px; color: var(--muted); }
+  .tools { display: grid; gap: 8px; }
+
+  /* ---------- system tab ---------- */
+  .sysframe { width: 100%; height: calc(100vh - 120px); border: 0; display: block; background: var(--bg); }
+  .sysnote { padding: 10px 18px; font-size: 13px; color: var(--muted); border-bottom: 1px solid var(--border); background: var(--card); }
+
+  /* ---------- map markers ---------- */
+  .rpin { position: relative; width: 34px; height: 34px; border-radius: 10px; background: var(--c); display: grid; place-items: center;
+          border: 2px solid #fff; box-shadow: 0 1px 4px rgba(0,0,0,.4); font-size: 18px; }
+  .rpin b { position: absolute; right: -7px; bottom: -7px; background: #111827; color: #fff; font: 700 11px/1 system-ui; padding: 3px 5px; border-radius: 99px; border: 2px solid #fff; }
+  .rpin.dim { opacity: .45; } .rpin.mine { box-shadow: 0 0 0 4px rgba(15,118,110,.55), 0 1px 4px rgba(0,0,0,.4); }
+  .pick { width: 18px; height: 18px; border-radius: 50%; background: var(--accent); border: 3px solid #fff; box-shadow: 0 0 0 3px var(--accent); animation: pulse 1.6s ease-out infinite; }
+  @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(15,118,110,.7); } 100% { box-shadow: 0 0 0 16px rgba(15,118,110,0); } }
+  .osm-tiles { filter: saturate(.6) contrast(.95); }
+  @media (prefers-color-scheme: dark) { .osm-tiles { filter: invert(1) hue-rotate(180deg) brightness(.85) contrast(.9) saturate(.4); } }
+  .leaflet-tooltip { font: 12.5px/1.4 system-ui, sans-serif; }
+
+  /* ---------- toasts ---------- */
+  #toasts { position: fixed; top: 80px; left: 50%; transform: translateX(-50%); z-index: 2000; display: grid; gap: 8px; width: min(440px, calc(100% - 24px)); pointer-events: none; }
+  .toast { background: #18202e; color: #fff; border-radius: 12px; padding: 12px 16px; font-weight: 600; box-shadow: 0 6px 20px rgba(0,0,0,.35); animation: rise .25s ease-out; }
+  .toast.ok { background: #166534; } .toast.bad { background: #991b1b; }
+  @keyframes rise { from { opacity: 0; transform: translateY(10px); } }
+  @media (prefers-reduced-motion: reduce) { .pick, .spin, .toast { animation: none; } .bar i { transition: none; } }
 </style>
 </head>
 <body>
-<main>
-  <header>
-    <div class="eyebrow">Cloud Computing · Semester 7</div>
-    <h1>Distributed Emergency Resource Matching</h1>
-    <p class="lede">People hit by a disaster ask for water, food, medicine, transport or shelter. Volunteers and NGOs
-      register what they can give. The system matches each request to the nearest resource with enough left,
-      and keeps working when a storage node dies.</p>
-  </header>
+<header>
+  <div class="brand">Emergency Resource Matching<small>The nearest help, matched in seconds</small></div>
+  <nav role="tablist" aria-label="Choose what you want to do">
+    <button role="tab" data-tab="need" aria-selected="true">I need help</button>
+    <button role="tab" data-tab="help" aria-selected="false">I can help</button>
+    <button role="tab" data-tab="live" aria-selected="false">Live board</button>
+    <button role="tab" data-tab="system" aria-selected="false">System</button>
+  </nav>
+  <div class="conn" id="conn" role="status"><i></i><span>Connecting…</span></div>
+</header>
+<div id="banner" role="status" hidden></div>
 
-  <h2>Live system</h2>
-  <p class="sub">These numbers come from the running cluster and refresh every 3 seconds.</p>
-  <div class="grid g4" id="stats">
-    <div class="card stat"><div class="n" id="s-total">–</div><div class="l">requests stored</div></div>
-    <div class="card stat"><div class="n" id="s-assigned">–</div><div class="l">matched to a resource</div></div>
-    <div class="card stat"><div class="n" id="s-unmatched">–</div><div class="l">waiting for supply</div></div>
-    <div class="card stat"><div class="n" id="s-res">–</div><div class="l">resources available</div></div>
-  </div>
+<div class="layout" id="layout">
+  <aside class="panel" id="panel">
 
-  <h2>Try it</h2>
-  <p class="sub">Register a resource, then create a request near it. The request is stored, queued in RabbitMQ and
-    matched in the background, so watch its status change in the table below.</p>
-  <div class="grid g2">
-    <div class="card">
-      <h3>1. Register a resource</h3>
-      <form id="f-res">
-        <div class="row">
-          <label>Type <select name="type"></select></label>
-          <label>Quantity <input name="quantity" type="number" min="1" value="10" required></label>
+    <!-- ====================== I NEED HELP ====================== -->
+    <section id="v-need">
+      <div id="need-form">
+        <h1>What do you need?</h1>
+        <p class="lede">Tell us what you need and where you are. We find the nearest person who can help.</p>
+        <details class="how"><summary>How does this work?</summary>
+          <ol><li>You send a request, and it is saved right away.</li>
+              <li>The system looks for the nearest helper with enough supplies.</li>
+              <li>You see who is coming and how far away they are, live on this page.</li></ol></details>
+        <div class="card">
+          <span class="label">1. I need…</span><div class="tiles" data-tiles="need"></div>
+          <span class="label">2. How many? <small>people or units</small></span>
+          <div class="stepper"><button type="button" data-step="need" data-d="-1" aria-label="Fewer">−</button>
+            <input id="need-qty" type="number" min="1" max="10000" value="2" inputmode="numeric" aria-label="Quantity">
+            <button type="button" data-step="need" data-d="1" aria-label="More">+</button></div>
+          <span class="label">3. How urgent is it?</span>
+          <div class="seg" id="need-urgency">
+            <button type="button" data-v="1" aria-pressed="false">Can wait</button>
+            <button type="button" data-v="3" aria-pressed="true">Soon</button>
+            <button type="button" data-v="5" class="urgent" aria-pressed="false">Emergency</button></div>
+          <span class="label">4. Where are you?</span><div class="loc" data-loc="need"></div><div class="nearby" id="need-nearby" aria-live="polite"></div>
+          <div style="margin-top:18px"><button class="btn" id="need-send" type="button">Request help</button>
+            <p class="hint" id="need-hint"></p></div>
         </div>
-        <div class="row">
-          <label>Name <input name="name" value="NGO tanker" maxlength="120" required></label>
-          <label>Location <select name="place"></select></label>
-        </div>
-        <button>Register resource</button>
-        <div class="result" id="r-res"></div>
-      </form>
-    </div>
-    <div class="card">
-      <h3>2. Create an emergency request</h3>
-      <form id="f-req">
-        <div class="row">
-          <label>Type <select name="type"></select></label>
-          <label>Quantity needed <input name="quantity" type="number" min="1" value="2" required></label>
-        </div>
-        <div class="row">
-          <label>Urgency (5 = critical)
-            <select name="urgency"><option>1</option><option>2</option><option selected>3</option><option>4</option><option>5</option></select></label>
-          <label>Location <select name="place"></select></label>
-        </div>
-        <button>Create request</button>
-        <div class="result" id="r-req"></div>
-      </form>
-    </div>
-  </div>
+      </div>
+      <div id="need-track" hidden></div>
+      <div id="need-list"></div>
+    </section>
 
-  <div class="card" style="margin-top:12px">
-    <div class="map-head">
-      <h3>Live map</h3>
-      <span>
-        <button class="ghost" id="view-mumbai" type="button">Mumbai</button>
-        <button class="ghost" id="view-all" type="button">Show everything</button>
-      </span>
-    </div>
+    <!-- ====================== I CAN HELP ====================== -->
+    <section id="v-help" hidden>
+      <h1>What can you offer?</h1>
+      <p class="lede">Offer supplies or your time. If someone nearby needs it, you are matched automatically, even if they asked earlier.</p>
+      <div class="card">
+        <span class="label">1. I can provide…</span><div class="tiles" data-tiles="help"></div>
+        <span class="label">2. How many units?</span>
+        <div class="stepper"><button type="button" data-step="help" data-d="-5" aria-label="Fewer">−</button>
+          <input id="help-qty" type="number" min="1" max="1000000" value="10" inputmode="numeric" aria-label="Units">
+          <button type="button" data-step="help" data-d="5" aria-label="More">+</button></div>
+        <span class="label">3. Who are you?</span>
+        <div class="seg" id="help-kind">
+          <button type="button" data-v="VOLUNTEER" aria-pressed="true">Volunteer</button>
+          <button type="button" data-v="NGO" aria-pressed="false">NGO</button>
+          <button type="button" data-v="SUPPLY" aria-pressed="false">Supply depot</button></div>
+        <span class="label">4. Name <small>(shown to people you help)</small></span>
+        <input type="text" id="help-name" maxlength="120" placeholder="e.g. Asha's water cans">
+        <span class="label">5. Where are you based?</span><div class="loc" data-loc="help"></div><div class="nearby" id="help-nearby" aria-live="polite"></div>
+        <div style="margin-top:18px"><button class="btn" id="help-send" type="button">Offer help</button>
+          <p class="hint" id="help-hint"></p></div>
+      </div>
+      <div id="help-list"></div>
+    </section>
+
+    <!-- ====================== LIVE BOARD ====================== -->
+    <section id="v-live" hidden>
+      <h1>Live board</h1>
+      <p class="lede">Everything happening right now. This updates by itself every few seconds.</p>
+      <div class="stats" id="stats"></div>
+      <h2>Latest activity</h2>
+      <div class="card" id="feed"></div>
+      <h2>Demo tools</h2>
+      <div class="card tools">
+        <button class="btn secondary" id="demo-res" type="button">Add demo helpers around Mumbai</button>
+        <button class="btn secondary" id="demo-req" type="button">Send 20 requests at once</button>
+        <p class="hint" id="demo-hint">Handy for a quick demo. Watch the numbers and the map change.</p>
+      </div>
+    </section>
+  </aside>
+
+  <main class="mapwrap" id="mapwrap">
     <div id="map"></div>
-    <div class="legend">
-      <span><i class="sq" style="background:#0284c7"></i>resource (number = units left)</span>
-      <span><i class="dot" style="background:#2563eb"></i>pending</span>
-      <span><i class="dot" style="background:#16a34a"></i>matched (dashed line to its resource)</span>
-      <span><i class="dot" style="background:#d97706"></i>waiting for supply</span>
-      <span>Click the map to pick a location for the forms.</span>
-    </div>
-  </div>
+    <div class="maptools"><button type="button" id="fit-mumbai">Mumbai</button><button type="button" id="fit-all">Show all</button></div>
+    <div class="legend" id="legend"></div>
+  </main>
+</div>
 
-  <div class="card" style="margin-top:12px">
-    <h3>Latest requests</h3>
-    <div class="scroll">
-      <table>
-        <thead><tr><th>Request</th><th>Type</th><th>Qty</th><th>Urgency</th><th>Where</th><th>Status</th><th>Matched resource</th><th></th></tr></thead>
-        <tbody id="t-req"><tr><td colspan="8" class="muted">loading…</td></tr></tbody>
-      </table>
-    </div>
-  </div>
-
-  <h2>How a request flows</h2>
-  <p class="sub">The client only ever talks to one gateway. Everything after step 2 happens asynchronously.</p>
-  <div class="flow">
-    <div class="card"><b>Client</b><span>POST /requests with type, location and quantity</span></div>
-    <div class="card"><b>Request service</b><span>stores it, replies 201, publishes to RabbitMQ</span></div>
-    <div class="card"><b>RabbitMQ</b><span>priority queue: urgent requests go first</span></div>
-    <div class="card"><b>Matching service</b><span>finds the nearest resource with enough quantity</span></div>
-    <div class="card"><b>Reserve + assign</b><span>a saga: if assigning fails, the reservation is undone</span></div>
-    <div class="card"><b>Storage</b><span>coordinator routes to 1 of 3 shards, each with a replica</span></div>
-  </div>
-
-  <h2>What makes it robust</h2>
-  <div class="grid g3">
-    <div class="card feature"><b>Sharded and replicated</b><span>Keys are hashed into 12 partitions spread over 3 shards. Every write goes to a primary and its replica before it is confirmed.</span></div>
-    <div class="card feature"><b>Survives node failure</b><span>If a primary dies, the coordinator promotes the replica and retries. Clients see no error. The node resyncs when it returns.</span></div>
-    <div class="card feature"><b>Never over-allocates</b><span>Every record has a version. Two matchers racing for the last units cannot both win: one write is refused and retried.</span></div>
-    <div class="card feature"><b>Real distance</b><span>Matching uses great-circle distance between coordinates, within 50 km, and skips resources that have too little left.</span></div>
-    <div class="card feature"><b>Backs off under stress</b><span>When storage is briefly unavailable, callers wait longer between retries (with jitter) instead of piling on.</span></div>
-    <div class="card feature"><b>Runs on Kubernetes</b><span>StatefulSets for storage, Deployments for services, an Ingress gateway. Pods that die are replaced; matching scales out.</span></div>
-  </div>
-
-  <h2>Explore</h2>
-  <div class="card links">
-    <a href="/requests">GET /requests</a>
-    <a href="/resources">GET /resources</a>
-    <a id="dash" href="http://localhost:8090/dashboard" target="_blank" rel="noopener">Storage cluster dashboard ↗</a>
-  </div>
-  <footer>The dashboard runs on the coordinator, which is internal to the cluster. Open it with
-    <code>make k8s-dashboard</code> (Kubernetes) or directly on port 8090 (docker compose).</footer>
-</main>
+<div id="toasts" aria-live="polite"></div>
 
 <script>
-const TYPES = ['water', 'food', 'medicine', 'transportation', 'shelter'];
-const PLACES = [
-  ['Kurla West, Mumbai', 19.0760, 72.8777], ['Bandra, Mumbai', 19.0596, 72.8295],
-  ['Andheri, Mumbai', 19.1136, 72.8697],   ['Thane', 19.2183, 72.9781],
-  ['Navi Mumbai', 19.0330, 73.0297],        ['Pune', 18.5204, 73.8567],
-];
-const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-const $ = id => document.getElementById(id);
-
-document.querySelectorAll('select[name=type]').forEach(s => s.innerHTML = TYPES.map(t => `<option>${t}</option>`).join(''));
-document.querySelectorAll('select[name=place]').forEach((s, i) =>
-  s.innerHTML = PLACES.map((p, j) => `<option value="${j}" ${j === (i ? 0 : 1) ? 'selected' : ''}>${p[0]}</option>`).join(''));
-
-async function api(method, path, body) {
-  const r = await fetch(path, { method, headers: body ? {'Content-Type': 'application/json'} : {}, body: body ? JSON.stringify(body) : undefined });
-  const data = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(data.error ? `${r.status} ${data.error.code}: ${data.error.message}` : `HTTP ${r.status}`);
-  return data;
-}
-let picked = null;  // {lat, lon} chosen by clicking the map
-const place = f => {
-  if (f.place.value === 'map' && picked) return { lat: picked.lat, lon: picked.lon, label: 'Picked on map' };
-  const p = PLACES[+f.place.value]; return { lat: p[1], lon: p[2], label: p[0] };
+"use strict";
+// ============================================================================ config
+const TYPES = {
+  water:          { label: 'Water',     icon: '💧', color: '#0284c7' },
+  food:           { label: 'Food',      icon: '🍲', color: '#16a34a' },
+  medicine:       { label: 'Medicine',  icon: '💊', color: '#dc2626' },
+  transportation: { label: 'Transport', icon: '🚑', color: '#7c3aed' },
+  shelter:        { label: 'Shelter',   icon: '🏠', color: '#d97706' },
 };
+const PLACES = [
+  ['Kurla West', 19.0760, 72.8777], ['Bandra', 19.0596, 72.8295], ['Andheri', 19.1136, 72.8697],
+  ['Dadar', 19.0176, 72.8562], ['Powai', 19.1197, 72.9058], ['Thane', 19.2183, 72.9781], ['Navi Mumbai', 19.0330, 73.0297],
+];
+const MUMBAI = [[19.00, 72.80], [19.22, 73.04]];
+const STATUS = {
+  PENDING:     { tone: 'info', icon: '<span class="spin">🔎</span>', head: 'Looking for the nearest help…', text: 'Your request is saved. We are checking who is closest.' },
+  UNMATCHED:   { tone: 'warn', icon: '⏳', head: 'No one nearby yet', text: 'We keep looking, and you will be matched automatically as soon as someone nearby offers help.' },
+  ASSIGNED:    { tone: 'ok',   icon: '✅', head: 'Help is on the way', text: '' },
+  IN_PROGRESS: { tone: 'ok',   icon: '🚚', head: 'Help is arriving', text: '' },
+  FULFILLED:   { tone: 'ok',   icon: '🎉', head: 'Help received', text: 'Glad it worked out. Stay safe.' },
+  CANCELLED:   { tone: 'idle', icon: '✖️', head: 'Request cancelled', text: 'Nothing was reserved for you any more.' },
+};
+const TERMINAL = new Set(['FULFILLED', 'CANCELLED']);
+const WORDS = { PENDING: 'Looking', UNMATCHED: 'Waiting', ASSIGNED: 'Matched', IN_PROGRESS: 'On the way', FULFILLED: 'Done', CANCELLED: 'Cancelled',
+                AVAILABLE: 'Open', EXHAUSTED: 'Used up', OFFLINE: 'Paused' };
+const REQ_COLOR = { PENDING: '#2563eb', UNMATCHED: '#d97706', ASSIGNED: '#16a34a', IN_PROGRESS: '#16a34a', FULFILLED: '#15803d', CANCELLED: '#9ca3af' };
 
-// ------------------------------------------------------------------ live map
-const TYPE_COLOR = { water: '#0284c7', food: '#16a34a', medicine: '#dc2626', transportation: '#7c3aed', shelter: '#d97706' };
-const STATUS_COLOR = { PENDING: '#2563eb', ASSIGNED: '#16a34a', IN_PROGRESS: '#16a34a', FULFILLED: '#15803d',
-                       UNMATCHED: '#d97706', CANCELLED: '#9ca3af' };
-const MUMBAI = [[19.00, 72.81], [19.21, 73.03]];
-let map = null, layer = null, pickMarker = null, flyTo = null;
+// ============================================================================ helpers
+const $ = (s, el = document) => el.querySelector(s);
+const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const store = {
+  get(k, d) { try { const v = JSON.parse(localStorage.getItem(k)); return v ?? d; } catch { return d; } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* private mode: fine */ } },
+};
+const clock = iso => new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+// Coarse on purpose: text that changes every poll would force a re-render (and could swallow a click).
+const ago = iso => { const s = Math.max(0, (Date.now() - new Date(iso)) / 1000); return s < 20 ? 'just now' : s < 60 ? 'under a minute ago' : s < 3600 ? `${Math.floor(s / 60)} min ago` : `${Math.floor(s / 3600)} h ago`; };
+// Only touch the DOM when the content really changed. Re-creating buttons on every poll made clicks
+// that landed mid-update vanish, collapsed open <details>, and dropped keyboard focus.
+function setHTML(el, html) {
+  if (el._html === html) return;
+  const open = [...el.querySelectorAll('details[open]')].map(d => d.className);
+  el._html = html; el.innerHTML = html;
+  el.querySelectorAll('details').forEach(d => { if (open.includes(d.className)) d.open = true; });
+}
+const shortId = id => id.slice(0, 6);
+const RADIUS_KM = 50;   // same as the matching service's default MAX_RADIUS_KM
+const hav = (la1, lo1, la2, lo2) => { const r = Math.PI / 180, a = Math.sin((la2 - la1) * r / 2) ** 2 + Math.cos(la1 * r) * Math.cos(la2 * r) * Math.sin((lo2 - lo1) * r / 2) ** 2; return 12742 * Math.asin(Math.sqrt(a)); };
+const placeLabel = loc => loc.label || `${loc.lat.toFixed(3)}, ${loc.lon.toFixed(3)}`;
+
+function toast(msg, kind = '') {
+  const el = document.createElement('div');
+  el.className = `toast ${kind}`; el.textContent = msg;
+  $('#toasts').append(el);
+  setTimeout(() => el.remove(), 5000);
+}
+
+// ---------------------------------------------------------------- API (plain-language errors, safe retries)
+class ApiError extends Error { constructor(status, code, message) { super(message); this.status = status; this.code = code; } }
+function friendly(e) {
+  if (e.status === 400) return 'Something in the form is not valid. Please check it.';
+  if (e.status === 503) return 'The system is still recovering from a problem. Please try again in a moment.';
+  if (e.status === 504) return 'We are not sure that went through. Check the list below before trying again.';
+  if (e.status === 0) return 'Cannot reach the system. Check that it is running.';
+  return e.message || 'Something went wrong.';
+}
+async function api(method, path, body) {
+  // 503 means "temporarily unavailable, NOT applied": safe to retry for any method (the backend
+  // sends Retry-After). A dropped connection is only retried for GET: a POST may have gone through.
+  for (let attempt = 0; ; attempt++) {
+    let res;
+    try {
+      res = await fetch(path, { method, headers: body ? { 'Content-Type': 'application/json' } : undefined, body: body ? JSON.stringify(body) : undefined });
+    } catch {
+      if (method === 'GET' && attempt < 2) { await sleep(400 * 2 ** attempt); continue; }
+      throw new ApiError(0, 'NETWORK', 'network');
+    }
+    if (res.status === 503 && attempt < 4) { showBanner('The system is recovering from a failure. Retrying automatically…'); await sleep(Math.min(2000, 400 * 2 ** attempt)); continue; }
+    showBanner('');
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new ApiError(res.status, data.error?.code, data.error?.message);
+    return data;
+  }
+}
+function showBanner(text) { const b = $('#banner'); b.hidden = !text; b.textContent = text; }
+
+// ============================================================================ state
+const S = {
+  tab: 'need', pick: { need: null, help: null }, need: { type: 'water', urgency: 3 }, help: { type: 'water', kind: 'VOLUNTEER' },
+  myReq: store.get('erm.req', []), myOff: store.get('erm.off', []),
+  trackId: null, needMode: 'form',
+  reqs: [], counts: { total: 0, by: {} }, resources: [], resById: {}, mine: {},
+  seenAlloc: {}, lastStatus: {},
+};
+S.trackId = S.myReq[0] || null; if (S.trackId) S.needMode = 'track';
+const saveMine = () => { store.set('erm.req', S.myReq.slice(0, 8)); store.set('erm.off', S.myOff.slice(0, 8)); };
+
+// ============================================================================ map
+let map = null, pickMarker = null;
+const layers = { res: new Map(), req: new Map(), lines: null };
 
 function initMap() {
-  const el = $('map');
+  const el = $('#map');
   if (typeof L === 'undefined') {
-    el.classList.add('off');
-    el.textContent = 'The map needs an internet connection (map library and tiles come from a CDN). Everything else on this page works without it.';
+    el.classList.add('off'); el.textContent = 'The map needs an internet connection (map library and tiles come from a CDN). You can still use the demo neighbourhood picker and everything else.';
     return;
   }
-  map = L.map(el, { preferCanvas: true, scrollWheelZoom: false }).fitBounds(MUMBAI);
-  // Standard OpenStreetMap tiles: free, no API key, attribution required. Fine for a demo's light use.
-  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    maxZoom: 18, className: 'osm-tiles',
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-  }).addTo(map);
-  layer = L.layerGroup().addTo(map);
-
-  map.on('click', e => {
-    picked = { lat: +e.latlng.lat.toFixed(5), lon: +e.latlng.lng.toFixed(5) };
-    const icon = L.divIcon({ className: '', html: '<div class="pick-pin"></div>', iconSize: [20, 20], iconAnchor: [10, 10] });
-    if (pickMarker) pickMarker.setLatLng(e.latlng); else pickMarker = L.marker(e.latlng, { icon, zIndexOffset: 1000 }).addTo(map);
-    pickMarker.bindTooltip(`Picked: ${picked.lat}, ${picked.lon}`).openTooltip();
-    document.querySelectorAll('select[name=place]').forEach(s => {
-      let opt = s.querySelector('option[value=map]');
-      if (!opt) { opt = document.createElement('option'); opt.value = 'map'; s.prepend(opt); }
-      opt.textContent = `Picked on map (${picked.lat.toFixed(3)}, ${picked.lon.toFixed(3)})`;
-      s.value = 'map';
-    });
-  });
-  $('view-mumbai').onclick = () => map.fitBounds(MUMBAI);
-  $('view-all').onclick = () => {
-    const pts = [];
-    layer.eachLayer(l => l.getLatLng && pts.push(l.getLatLng()));
-    if (pts.length) map.fitBounds(L.latLngBounds(pts), { padding: [30, 30] });
-  };
+  map = L.map(el, { preferCanvas: false, scrollWheelZoom: true }).fitBounds(MUMBAI);
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 18, className: 'osm-tiles',
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors' }).addTo(map);
+  layers.res.group = L.layerGroup().addTo(map); layers.req.group = L.layerGroup().addTo(map); layers.lines = L.layerGroup().addTo(map);
+  map.on('click', e => { if (S.tab === 'need' || S.tab === 'help') setLoc(S.tab, e.latlng.lat, e.latlng.lng, 'Pinned on the map'); });
+  $('#fit-mumbai').onclick = () => map.fitBounds(MUMBAI);
+  $('#fit-all').onclick = fitAll;
 }
-
-function drawMap(requests, resources) {
+function fitAll() {
   if (!map) return;
-  layer.clearLayers();
-  const byId = Object.fromEntries(resources.map(r => [r.id, r]));
-  // dashed line from every matched request to the resource serving it
-  for (const r of requests) {
-    const res = r.assignment && byId[r.assignment.resource_id];
-    if (res && ['ASSIGNED', 'IN_PROGRESS'].includes(r.status)) {
-      L.polyline([[r.location.lat, r.location.lon], [res.location.lat, res.location.lon]],
-                 { color: '#16a34a', weight: 2, opacity: .7, dashArray: '5 6' }).addTo(layer);
+  const pts = [...layers.res.values(), ...layers.req.values()].filter(m => m.getLatLng).map(m => m.getLatLng());
+  if (pts.length) map.fitBounds(L.latLngBounds(pts), { padding: [40, 40], maxZoom: 15 });
+}
+const fly = (lat, lon, z = 13) => map && map.flyTo([lat, lon], Math.max(map.getZoom(), z), { duration: .7 });
+const fitPair = (a, b) => map && map.fitBounds(L.latLngBounds([a, b]), { padding: [70, 70], maxZoom: 15 });
+
+function resIcon(r, mine) {
+  const t = TYPES[r.type] || TYPES.water;
+  return L.divIcon({ className: '', iconSize: [34, 34], iconAnchor: [17, 17],
+    html: `<div class="rpin ${mine ? 'mine' : ''} ${r.status !== 'AVAILABLE' ? 'dim' : ''}" style="--c:${t.color}"><span>${t.icon}</span><b>${r.availability.quantity_remaining}</b></div>` });
+}
+function sync(kind, items, make, update) {   // keyed marker sync: add / update in place / remove, so tooltips don't flicker
+  const bag = layers[kind], want = new Set();
+  for (const it of items) {
+    want.add(it.id);
+    let m = bag.get(it.id);
+    if (!m) { m = make(it); m.addTo(bag.group); bag.set(it.id, m); } else update(m, it);
+  }
+  for (const [id, m] of bag) if (id !== 'group' && !want.has(id) && id !== undefined) { bag.group.removeLayer(m); bag.delete(id); }
+}
+const isMine = { req: r => S.myReq.includes(r.id), res: r => S.myOff.includes(r.id) };
+
+function drawMap() {
+  if (!map) return;
+  const tab = S.tab;
+  const reqs = Object.values(S.mine).concat(S.reqs.filter(r => !S.mine[r.id]));
+  const shownReq = reqs.filter(r => {
+    if (r.status === 'CANCELLED') return false;
+    if (tab === 'need') return isMine.req(r);
+    if (tab === 'help') return r.status === 'PENDING' || r.status === 'UNMATCHED' || isMine.req(r) || (r.assignment && S.myOff.includes(r.assignment.resource_id));
+    return true;
+  });
+  const shownRes = S.resources.filter(r => r.status !== 'OFFLINE' || isMine.res(r));
+  sync('res', shownRes, r => {
+      const m = L.marker([r.location.lat, r.location.lon], { icon: resIcon(r, isMine.res(r)) }); m._sig = ''; m.bindTooltip(''); return m; },
+    (m, r) => {});
+  for (const r of shownRes) {   // update icon/tooltip only when something changed
+    const m = layers.res.get(r.id), sig = `${r.status}|${r.availability.quantity_remaining}|${isMine.res(r)}`;
+    if (m._sig !== sig) { m._sig = sig; m.setIcon(resIcon(r, isMine.res(r))); }
+    m.setTooltipContent(`<b>${esc(r.name)}</b><br>${TYPES[r.type]?.label || r.type} · ${r.availability.quantity_remaining} of ${r.availability.quantity_total} left`);
+  }
+  sync('req', shownReq, r => {
+      const m = L.circleMarker([r.location.lat, r.location.lon], { radius: 7, weight: 2, color: '#fff', fillOpacity: .95 }); m.bindTooltip(''); return m; }, () => {});
+  for (const r of shownReq) {
+    const m = layers.req.get(r.id), mine = isMine.req(r);
+    m.setStyle({ fillColor: REQ_COLOR[r.status] || '#666', radius: mine ? 10 : 7, weight: mine ? 3 : 2, color: mine ? '#0f766e' : '#fff' });
+    m.setTooltipContent(`<b>${TYPES[r.type]?.label || r.type} × ${r.quantity}</b>${mine ? ' (yours)' : ''}<br>${WORDS[r.status] || r.status}` +
+      (r.assignment ? `<br>→ ${esc(S.resById[r.assignment.resource_id]?.name || 'a helper')}, ${r.assignment.distance_km} km` : ''));
+  }
+  layers.lines.clearLayers();
+  for (const r of shownReq) {
+    const h = r.assignment && S.resById[r.assignment.resource_id];
+    if (h && (r.status === 'ASSIGNED' || r.status === 'IN_PROGRESS')) {
+      L.polyline([[r.location.lat, r.location.lon], [h.location.lat, h.location.lon]],
+        { color: '#16a34a', weight: isMine.req(r) ? 4 : 2, opacity: .75, dashArray: '6 7' }).addTo(layers.lines);
     }
   }
-  for (const r of requests) {
-    L.circleMarker([r.location.lat, r.location.lon], { radius: 6, weight: 2, color: '#fff',
-        fillColor: STATUS_COLOR[r.status] || '#666', fillOpacity: .95 })
-      .bindTooltip(`<b>${esc(r.type)}</b> × ${r.quantity} · urgency ${r.urgency}<br>${r.status}` +
-                   (r.assignment ? `<br>→ ${esc(byId[r.assignment.resource_id]?.name || 'resource')}, ${r.assignment.distance_km} km` : ''))
-      .addTo(layer);
+  if (S.pick[tab]) placePick(S.pick[tab]);
+  else if (pickMarker) { map.removeLayer(pickMarker); pickMarker = null; }
+}
+function placePick(p) {
+  if (!map) return;
+  const ll = [p.lat, p.lon];
+  if (!pickMarker) pickMarker = L.marker(ll, { icon: L.divIcon({ className: '', iconSize: [18, 18], iconAnchor: [9, 9], html: '<div class="pick"></div>' }), zIndexOffset: 1000, interactive: false }).addTo(map);
+  else pickMarker.setLatLng(ll);
+}
+function drawLegend() {
+  const items = { need: [['sq', '#0284c7', 'Help available (number = units left)'], ['dot', '#16a34a', 'Your request, matched']],
+                  help: [['dot', '#d97706', 'Someone waiting for help'], ['sq', '#0284c7', 'Offers (ringed = yours)']],
+                  live: [['sq', '#0284c7', 'Offers (number = units left)'], ['dot', '#2563eb', 'Looking'], ['dot', '#16a34a', 'Matched'], ['dot', '#d97706', 'Waiting']] }[S.tab] || [];
+  $('#legend').innerHTML = items.map(([k, c, t]) => `<span><i class="${k}" style="background:${c}"></i>${t}</span>`).join('') + (S.tab === 'live' ? '' : '<span>Tap the map to place your pin</span>');
+}
+
+// ============================================================================ shared form widgets
+function buildTiles() {
+  $$('[data-tiles]').forEach(box => {
+    const kind = box.dataset.tiles;
+    box.innerHTML = Object.entries(TYPES).map(([k, t]) => `<button type="button" class="tile" data-type="${k}" aria-pressed="${S[kind].type === k}"><span>${t.icon}</span>${t.label}</button>`).join('');
+    box.onclick = e => { const b = e.target.closest('.tile'); if (!b) return; S[kind].type = b.dataset.type; $$('.tile', box).forEach(x => x.setAttribute('aria-pressed', x === b)); updateNearby(); };
+  });
+  $$('[data-step]').forEach(b => b.onclick = () => { const i = $(`#${b.dataset.step}-qty`); i.value = Math.max(1, (+i.value || 1) + +b.dataset.d); updateNearby(); });
+  $('#need-qty').oninput = updateNearby;
+  for (const id of ['need-urgency', 'help-kind']) {
+    const box = $('#' + id), key = id === 'need-urgency' ? 'urgency' : 'kind', obj = id === 'need-urgency' ? S.need : S.help;
+    box.onclick = e => { const b = e.target.closest('button'); if (!b) return; obj[key] = key === 'urgency' ? +b.dataset.v : b.dataset.v; $$('button', box).forEach(x => x.setAttribute('aria-pressed', x === b)); };
   }
-  for (const res of resources) {
-    const left = res.availability.quantity_remaining;
-    const w = Math.max(22, String(left).length * 8 + 10);
-    const icon = L.divIcon({ className: '', iconSize: [w, 24], iconAnchor: [w / 2, 12],
-      html: `<div class="res-pin" style="background:${TYPE_COLOR[res.type] || '#666'};opacity:${res.status === 'AVAILABLE' ? 1 : .45}">${left}</div>` });
-    L.marker([res.location.lat, res.location.lon], { icon })
-      .bindTooltip(`<b>${esc(res.name)}</b><br>${esc(res.type)} · ${left}/${res.availability.quantity_total} left · ${res.status}`)
-      .addTo(layer);
+  $$('[data-loc]').forEach(box => {
+    const kind = box.dataset.loc;
+    box.innerHTML = `<div class="where"></div><div class="row"><button type="button" class="btn secondary small" data-act="gps">📍 Use my location</button>
+      <select aria-label="Choose a demo neighbourhood"><option value="">Pick a place…</option>${PLACES.map((p, i) => `<option value="${i}">${p[0]}</option>`).join('')}</select></div>`;
+    $('[data-act=gps]', box).onclick = () => {
+      if (!navigator.geolocation) return toast('Location is not available here. Tap the map instead.', 'bad');
+      navigator.geolocation.getCurrentPosition(p => setLoc(kind, p.coords.latitude, p.coords.longitude, 'My location'), () => toast('Could not get your location. Tap the map instead.', 'bad'), { timeout: 8000 });
+    };
+    $('select', box).onchange = e => { if (e.target.value === '') return; const p = PLACES[+e.target.value]; setLoc(kind, p[1], p[2], p[0]); };
+    renderLoc(kind);
+  });
+}
+function setLoc(kind, lat, lon, label) { S.pick[kind] = { lat: +lat.toFixed(5), lon: +lon.toFixed(5), label }; renderLoc(kind); fly(lat, lon); drawMap(); updateHints(); updateNearby(); }
+function renderLoc(kind) {
+  const box = $(`[data-loc=${kind}]`), p = S.pick[kind];
+  box.classList.toggle('set', !!p);
+  $('.where', box).textContent = p ? `📍 ${p.label}` : 'Tap the map, use your location, or pick a demo neighbourhood';
+}
+function updateHints() {
+  $('#need-send').disabled = !S.pick.need; $('#need-hint').textContent = S.pick.need ? '' : 'Choose your location first';
+  $('#help-send').disabled = !S.pick.help; $('#help-hint').textContent = S.pick.help ? '' : 'Choose your location first';
+  $('#need-hint').className = $('#help-hint').className = 'hint';
+}
+const clampQty = (id, max) => Math.min(max, Math.max(1, Math.round(+$(id).value) || 1));
+
+// ---------------------------------------------------------------- live hints: set expectations before the person submits
+function updateNearby() {
+  const need = $('#need-nearby'), help = $('#help-nearby'), pn = S.pick.need, ph = S.pick.help;
+  if (!pn) { need.textContent = ''; need.className = 'nearby'; } else {
+    const t = TYPES[S.need.type], qty = Math.max(1, +$('#need-qty').value || 1);
+    const c = S.resources.filter(r => r.type === S.need.type && r.status === 'AVAILABLE' && r.availability.quantity_remaining >= qty)
+      .map(r => ({ r, d: hav(pn.lat, pn.lon, r.location.lat, r.location.lon) })).filter(x => x.d <= RADIUS_KM).sort((a, b) => a.d - b.d);
+    need.className = 'nearby ' + (c.length ? 'tone-ok' : 'tone-warn');
+    need.textContent = c.length ? `${t.icon} ${c.length} helper${c.length > 1 ? 's' : ''} nearby can cover this. Nearest: ${c[0].r.name}, ${c[0].d.toFixed(1)} km away.`
+      : `No ${t.label.toLowerCase()} helpers nearby right now. You can still ask: you will be matched automatically when someone nearby offers help.`;
   }
-  if (flyTo) { map.flyTo(flyTo, Math.max(map.getZoom(), 12), { duration: .8 }); flyTo = null; }
+  if (!ph) { help.textContent = ''; help.className = 'nearby'; } else {
+    const t = TYPES[S.help.type];
+    const w = S.reqs.filter(r => r.type === S.help.type && (r.status === 'PENDING' || r.status === 'UNMATCHED') && hav(ph.lat, ph.lon, r.location.lat, r.location.lon) <= RADIUS_KM);
+    help.className = 'nearby ' + (w.length ? 'tone-warn' : 'tone-idle');
+    help.textContent = w.length ? `${t.icon} ${w.length} ${w.length > 1 ? 'people' : 'person'} nearby ${w.length > 1 ? 'are' : 'is'} waiting for ${t.label.toLowerCase()}. Your offer will be matched to them automatically.`
+      : `No one nearby is waiting for ${t.label.toLowerCase()} right now. If someone asks later, you will be matched automatically.`;
+  }
 }
 
-async function submit(form, out, fn) {
-  const btn = form.querySelector('button');
-  btn.disabled = true; out.className = 'result'; out.textContent = 'sending…';
-  try { out.textContent = await fn(); } catch (e) { out.className = 'result err'; out.textContent = e.message; }
-  btn.disabled = false; refresh();
-}
-$('f-res').addEventListener('submit', e => { e.preventDefault(); const f = e.target;
-  submit(f, $('r-res'), async () => {
-    const r = await api('POST', '/resources', { type: f.type.value, name: f.name.value, quantity: +f.quantity.value, location: place(f) });
-    return `Registered ${r.name} (${r.availability.quantity_remaining} units, id ${r.id.slice(0, 8)}).`;
-  }); });
-$('f-req').addEventListener('submit', e => { e.preventDefault(); const f = e.target;
-  submit(f, $('r-req'), async () => {
-    const r = await api('POST', '/requests', { type: f.type.value, quantity: +f.quantity.value, urgency: +f.urgency.value,
-                                               location: place(f), details: 'created from the landing page' });
-    flyTo = [r.location.lat, r.location.lon];
-    setTimeout(refresh, 700);
-    return `Created ${r.id.slice(0, 8)}: stored as ${r.status}` + (r.queued_for_matching ? ' and queued for matching.' : ' (broker down: not queued).');
-  }); });
-
-async function cancel(id) { try { await api('PUT', `/requests/${id}/status`, { status: 'CANCELLED' }); } catch (e) { alert(e.message); } refresh(); }
-
-const names = {};  // resource id -> name, filled lazily
-async function resourceName(id) {
-  if (!(id in names)) { names[id] = '…'; try { names[id] = (await api('GET', `/resources/${id}`)).name; } catch { names[id] = id.slice(0, 8); } }
-  return names[id];
-}
-
-async function refresh() {
+// ============================================================================ I NEED HELP
+async function sendRequest() {
+  const btn = $('#need-send'), hint = $('#need-hint'); btn.disabled = true; btn.textContent = 'Sending…'; hint.className = 'hint';
   try {
-    const [reqs, res] = await Promise.all([api('GET', '/requests?limit=200'), api('GET', '/resources')]);
-    const count = s => reqs.by_status[s] || 0;
-    $('s-total').textContent = reqs.count;
-    $('s-assigned').textContent = count('ASSIGNED') + count('IN_PROGRESS') + count('FULFILLED');
-    $('s-unmatched').textContent = count('UNMATCHED') + count('PENDING');
-    $('s-res').textContent = res.items.filter(r => r.status === 'AVAILABLE').length;
-    res.items.forEach(r => names[r.id] = r.name);
-    drawMap(reqs.items, res.items);
-    const rows = await Promise.all(reqs.items.slice(0, 8).map(async r => {
-      const a = r.assignment;
-      const matched = a ? `${esc(await resourceName(a.resource_id))} <span class="muted">· ${a.distance_km} km</span>` : '<span class="muted">–</span>';
-      const open = ['PENDING', 'UNMATCHED', 'ASSIGNED', 'IN_PROGRESS'].includes(r.status);
-      return `<tr><td class="mono">${r.id.slice(0, 8)}</td><td>${esc(r.type)}</td><td>${r.quantity}</td><td>${r.urgency}</td>
-        <td>${esc(r.location.label || r.location.lat.toFixed(2) + ', ' + r.location.lon.toFixed(2))}</td>
-        <td><span class="b ${r.status}">${r.status}</span></td><td>${matched}</td>
-        <td>${open ? `<button class="ghost" onclick="cancel('${r.id}')">Cancel</button>` : ''}</td></tr>`;
-    }));
-    $('t-req').innerHTML = rows.join('') || '<tr><td colspan="8" class="muted">No requests yet. Create one above.</td></tr>';
-  } catch (e) {
-    $('t-req').innerHTML = `<tr><td colspan="8" class="muted">API unreachable: ${esc(e.message)}</td></tr>`;
+    const p = S.pick.need, qty = clampQty('#need-qty', 10000); $('#need-qty').value = qty;
+    const r = await api('POST', '/requests', { type: S.need.type, quantity: qty, urgency: S.need.urgency,
+      location: { lat: p.lat, lon: p.lon, label: p.label }, details: 'sent from the web page' });
+    S.myReq.unshift(r.id); S.myReq = [...new Set(S.myReq)]; saveMine(); putMine(r); S.trackId = r.id; S.needMode = 'track';
+    S.lastStatus[r.id] = r.status;   // remember 'pending', so a very fast match still triggers its toast
+    renderNeed(); drawMap(); refresh();
+  } catch (e) { hint.className = 'hint err'; hint.textContent = friendly(e); }
+  btn.textContent = 'Request help'; updateHints();
+}
+async function setStatus(id, status) {
+  try { putMine(await api('PUT', `/requests/${id}/status`, { status })); renderNeed(); drawMap(); refresh(); }
+  catch (e) { toast(friendly(e), 'bad'); }
+}
+function renderNeed() {
+  const form = $('#need-form'), trackBox = $('#need-track');
+  const tr = S.trackId && S.mine[S.trackId];
+  form.hidden = !(S.needMode === 'form' || !tr); trackBox.hidden = form.hidden === false;
+  if (!trackBox.hidden && tr) {
+    const st = STATUS[tr.status] || STATUS.PENDING, t = TYPES[tr.type] || TYPES.water, helper = tr.assignment && S.resById[tr.assignment.resource_id];
+    let text = st.text;
+    if (tr.assignment) text = `${esc(helper?.name || 'A helper')} is ${tr.assignment.distance_km} km from you` + (tr.status === 'FULFILLED' ? '.' : '. You can follow them on the map.');
+    // stage = index of the step happening NOW; every step before it is done (4 = all done)
+    const stage = tr.status === 'CANCELLED' ? -1 : tr.status === 'FULFILLED' ? 4 : (tr.status === 'ASSIGNED' || tr.status === 'IN_PROGRESS') ? 3 : 1;
+    const steps = ['Request sent', 'Finding help', 'Matched', 'Received'].map((s, i) => `<li class="${i < stage ? 'done' : ''} ${i === stage ? 'now' : ''}">${s}</li>`).join('');
+    const hist = (tr.history || []).map(h => `<li><time>${clock(h.at)}</time><span>${({ PENDING: 'Request sent', UNMATCHED: 'No one nearby yet, still looking', ASSIGNED: 'Matched with a helper',
+      IN_PROGRESS: 'Help on the way', FULFILLED: 'Help received', CANCELLED: 'Cancelled' })[h.status] || h.status}</span></li>`).join('');
+    const open = !TERMINAL.has(tr.status);
+    setHTML(trackBox, `
+      <div class="card">
+        <div class="banner-status tone-${st.tone}" aria-live="polite"><div class="ico">${st.icon}</div><div><h2>${st.head}</h2><p>${text}</p></div></div>
+        <ol class="steps" ${stage < 0 ? 'hidden' : ''}>${steps}</ol>
+        <dl class="facts"><dt>You asked for</dt><dd>${t.icon} ${t.label} × ${tr.quantity}</dd>
+          <dt>Where</dt><dd>${esc(placeLabel(tr.location))}</dd>
+          ${helper ? `<dt>Your helper</dt><dd>${TYPES[helper.type]?.icon || ''} ${esc(helper.name)}</dd>` : ''}
+          <dt>Request</dt><dd>#${shortId(tr.id)}</dd></dl>
+        <div class="actions">
+          ${tr.status === 'ASSIGNED' || tr.status === 'IN_PROGRESS' ? '<button class="btn" data-act="received">Help has arrived</button>' : ''}
+          ${open ? '<button class="btn secondary" data-act="cancel">Cancel request</button>' : ''}
+          <button class="btn ${open ? 'secondary' : ''}" data-act="new">Ask for something else</button></div>
+        <details class="tl"><summary>What happened so far</summary><ul class="timeline">${hist}</ul></details>
+      </div>`);
+    trackBox.onclick = e => { const a = e.target.closest('[data-act]')?.dataset.act; if (!a) return;
+      if (a === 'new') { S.needMode = 'form'; renderNeed(); } else if (a === 'cancel') setStatus(tr.id, 'CANCELLED'); else if (a === 'received') setStatus(tr.id, 'FULFILLED'); };
+  }
+  const others = S.myReq.filter(id => S.mine[id] && id !== S.trackId || (S.mine[id] && S.needMode === 'form'));
+  setHTML($('#need-list'), others.length ? `<h2>My requests</h2><div class="card">${others.map(id => { const r = S.mine[id], t = TYPES[r.type] || TYPES.water;
+    return `<button class="item" data-id="${id}"><span class="ico">${t.icon}</span><span class="main"><b>${t.label} × ${r.quantity}</b><span>${esc(placeLabel(r.location))} · ${ago(r.created_at)}</span></span><span class="pill ${r.status}">${WORDS[r.status]}</span></button>`; }).join('')}</div>` : '');
+  $('#need-list').onclick = e => { const b = e.target.closest('.item'); if (!b) return; S.trackId = b.dataset.id; S.needMode = 'track'; renderNeed(); drawMap();
+    const r = S.mine[S.trackId]; if (r) fly(r.location.lat, r.location.lon); };
+}
+function noticeChanges(r) {   // toast + camera move when my request changes status
+  const prev = S.lastStatus[r.id]; S.lastStatus[r.id] = r.status;
+  if (!prev || prev === r.status) return;
+  const h = r.assignment && S.resById[r.assignment.resource_id];
+  if (r.status === 'ASSIGNED') {
+    toast(`Matched! ${h?.name || 'A helper'} is ${r.assignment.distance_km} km away.`, 'ok');
+    if (h && S.trackId === r.id) fitPair([r.location.lat, r.location.lon], [h.location.lat, h.location.lon]);
+  } else if (r.status === 'UNMATCHED') toast('No one nearby yet. We will keep looking.');
+}
+
+// ============================================================================ I CAN HELP
+async function sendOffer() {
+  const btn = $('#help-send'), hint = $('#help-hint'); btn.disabled = true; btn.textContent = 'Saving…'; hint.className = 'hint';
+  try {
+    const p = S.pick.help, qty = clampQty('#help-qty', 1000000); $('#help-qty').value = qty;
+    const name = $('#help-name').value.trim() || ({ VOLUNTEER: 'Volunteer', NGO: 'NGO team', SUPPLY: 'Supply depot' })[S.help.kind];
+    const r = await api('POST', '/resources', { type: S.help.type, name, provider: S.help.kind, quantity: qty, location: { lat: p.lat, lon: p.lon, label: p.label } });
+    S.myOff.unshift(r.id); S.myOff = [...new Set(S.myOff)]; saveMine(); S.resources.push(r); S.resById[r.id] = r; S.seenAlloc[r.id] = 0;
+    $('#help-name').value = ''; toast(`You are on the map: ${r.name} (${qty} units)`, 'ok'); renderHelp(); drawMap(); refresh();
+  } catch (e) { hint.className = 'hint err'; hint.textContent = friendly(e); }
+  btn.textContent = 'Offer help'; updateHints();
+}
+async function updateOffer(id, body) {
+  try { const r = await api('PUT', `/resources/${id}/status`, body); S.resById[id] = r; S.resources = S.resources.map(x => x.id === id ? r : x); renderHelp(); drawMap(); }
+  catch (e) { toast(friendly(e), 'bad'); }
+}
+function renderHelp() {
+  const mine = S.myOff.map(id => S.resById[id]).filter(Boolean);
+  setHTML($('#help-list'), mine.length ? `<h2>My offers</h2><div class="card">${mine.map(r => { const a = r.availability, t = TYPES[r.type] || TYPES.water, used = a.quantity_total - a.quantity_remaining;
+    const who = r.allocations.length ? `Helping ${r.allocations.length} request${r.allocations.length > 1 ? 's' : ''}: ${r.allocations.slice(-3).map(x => `${x.quantity} units`).join(', ')}` : 'No one matched yet';
+    return `<div class="offer" data-id="${r.id}"><div class="head"><span class="ico">${t.icon}</span><b>${esc(r.name)}</b><span class="pill ${r.status}">${WORDS[r.status]}</span></div>
+      <div class="bar" title="${used} of ${a.quantity_total} used"><i style="width:${a.quantity_total ? 100 * a.quantity_remaining / a.quantity_total : 0}%"></i></div>
+      <span class="muted" style="font-size:13px">${a.quantity_remaining} of ${a.quantity_total} units left · ${who}</span>
+      <div class="acts"><button class="btn secondary small" data-act="more">+10 units</button>
+        <button class="btn secondary small" data-act="${r.status === 'OFFLINE' ? 'resume' : 'pause'}">${r.status === 'OFFLINE' ? 'Resume' : 'Pause'}</button></div></div>`; }).join('')}</div>` : '');
+  $('#help-list').onclick = e => { const a = e.target.closest('[data-act]')?.dataset.act, id = e.target.closest('.offer')?.dataset.id; if (!a || !id) return; const r = S.resById[id];
+    if (a === 'more') updateOffer(id, { quantity_remaining: r.availability.quantity_remaining + 10 });
+    else updateOffer(id, { status: a === 'pause' ? 'OFFLINE' : 'AVAILABLE' }); };
+}
+function noticeAllocations() {   // toast when someone gets matched to one of my offers
+  for (const id of S.myOff) {
+    const r = S.resById[id]; if (!r) continue;
+    const n = r.allocations.length, seen = S.seenAlloc[id]; S.seenAlloc[id] = n;
+    if (seen !== undefined && n > seen) { const a = r.allocations[n - 1]; toast(`Matched! ${a.quantity} units of ${r.name} assigned to a nearby request.`, 'ok'); }
   }
 }
-$('dash').href = `${location.protocol}//${location.hostname}:8090/dashboard`;
-initMap();
-refresh(); setInterval(refresh, 3000);
+
+// ============================================================================ LIVE BOARD
+function renderLive() {
+  const by = S.counts.by, matched = (by.ASSIGNED || 0) + (by.IN_PROGRESS || 0) + (by.FULFILLED || 0), waiting = (by.PENDING || 0) + (by.UNMATCHED || 0);
+  const units = S.resources.filter(r => r.status === 'AVAILABLE').reduce((s, r) => s + r.availability.quantity_remaining, 0);
+  setHTML($('#stats'), [[S.counts.total, 'requests received'], [matched, 'matched with a helper'], [waiting, 'still waiting'], [units, 'units available now']]
+    .map(([n, l]) => `<div class="stat"><b>${n.toLocaleString()}</b><span>${l}</span></div>`).join(''));
+  const rows = [...S.reqs].sort((a, b) => b.updated_at.localeCompare(a.updated_at)).slice(0, 8);
+  setHTML($('#feed'), rows.length ? rows.map(r => { const t = TYPES[r.type] || TYPES.water, h = r.assignment && S.resById[r.assignment.resource_id];
+    return `<div class="item"><span class="ico">${t.icon}</span><span class="main"><b>${t.label} × ${r.quantity} · ${esc(placeLabel(r.location))}</b><span>${h ? `${esc(h.name)} · ${r.assignment.distance_km} km · ` : ''}${ago(r.updated_at)}</span></span><span class="pill ${r.status}">${WORDS[r.status]}</span></div>`; }).join('')
+    : '<span class="muted">Nothing yet. Create a request, or use the demo tools below.</span>');
+}
+const DEMO_RES = [['water', 'Municipal tanker', 'SUPPLY', 40, 19.0596, 72.8295], ['water', 'Volunteer Asha', 'VOLUNTEER', 6, 19.0728, 72.8826], ['food', 'Community kitchen', 'NGO', 80, 19.0176, 72.8562],
+  ['food', 'Gurudwara langar', 'NGO', 120, 19.1197, 72.9058], ['medicine', 'KEM pharmacy', 'SUPPLY', 25, 19.0026, 72.8416], ['medicine', 'Dr. Mehta (volunteer)', 'VOLUNTEER', 8, 19.1136, 72.8697],
+  ['transportation', 'Ambulance team', 'SUPPLY', 3, 19.0330, 73.0297], ['transportation', 'Boat volunteers', 'VOLUNTEER', 4, 19.0600, 72.8900],
+  ['shelter', 'BMC school hall', 'NGO', 150, 19.0430, 72.8640], ['shelter', 'Community centre', 'NGO', 90, 19.2183, 72.9781]];
+async function demoResources() {
+  const btn = $('#demo-res'); btn.disabled = true; $('#demo-hint').textContent = 'Adding helpers…';
+  const res = await Promise.allSettled(DEMO_RES.map(([type, name, provider, quantity, lat, lon]) =>
+    api('POST', '/resources', { type, name, provider, quantity, location: { lat, lon, label: name } })));
+  const ok = res.filter(r => r.status === 'fulfilled').length;
+  $('#demo-hint').textContent = `Added ${ok} helpers. Any waiting requests nearby were matched automatically.`; btn.disabled = false; refresh(); fitMumbaiSoon();
+}
+async function demoRequests() {
+  const btn = $('#demo-req'); btn.disabled = true; $('#demo-hint').textContent = 'Sending 20 requests…';
+  const keys = Object.keys(TYPES), rnd = (a, b) => a + Math.random() * (b - a);
+  const res = await Promise.allSettled(Array.from({ length: 20 }, () => api('POST', '/requests', { type: keys[Math.floor(Math.random() * keys.length)],
+    quantity: 1 + Math.floor(Math.random() * 4), urgency: 1 + Math.floor(Math.random() * 5), details: 'demo burst',
+    location: { lat: rnd(19.01, 19.21), lon: rnd(72.82, 73.03) } })));
+  const ok = res.filter(r => r.status === 'fulfilled').length;
+  $('#demo-hint').textContent = `Sent ${ok} requests. They are matched in the background, so watch the numbers.`; btn.disabled = false; refresh(); fitMumbaiSoon();
+}
+const fitMumbaiSoon = () => map && map.fitBounds(MUMBAI);
+
+// ============================================================================ polling
+// A request's history only ever grows, and updated_at only moves forward, so (history length, updated_at)
+// orders snapshots. Two pollers run at different speeds; without this, a slow response that STARTED before
+// a match could arrive AFTER it and flip the screen back to "looking...".
+const rank = r => [r.history?.length || 0, r.updated_at || ''];
+function putMine(r) {
+  const cur = S.mine[r.id], [a, b] = rank(r), [c, d] = cur ? rank(cur) : [-1, ''];
+  if (!cur || a > c || (a === c && b >= d)) S.mine[r.id] = r;
+  return S.mine[r.id];
+}
+let busy = false, again = false;
+async function refresh() {
+  if (busy) { again = true; return; }   // never overlap full refreshes; run once more afterwards instead
+  busy = true;
+  try {
+    const wantList = S.tab !== 'need';   // the "I need help" tab only shows my own requests: skip the big list there
+    const [rq, rs] = await Promise.all([wantList ? api('GET', '/requests?limit=200') : null, api('GET', '/resources')]);
+    if (rq) { S.reqs = rq.items; S.counts = { total: rq.count, by: rq.by_status || {} }; }
+    S.resources = rs.items; S.resById = Object.fromEntries(rs.items.map(r => [r.id, r]));
+    const inList = rq ? Object.fromEntries(rq.items.map(r => [r.id, r])) : {};
+    // my requests: from the list when present, otherwise fetched one by one
+    await Promise.all(S.myReq.map(async id => { try { putMine(inList[id] || await api('GET', `/requests/${id}`)); }
+      catch (e) { if (e.status === 404) { S.myReq = S.myReq.filter(x => x !== id); saveMine(); } } }));
+    Object.values(S.mine).forEach(noticeChanges); noticeAllocations();
+    setConn(true);
+  } catch { setConn(false); }
+  busy = false; render();
+  if (again) { again = false; refresh(); }
+}
+async function ensureHelper(r) {   // the helper may be newer than the last resource-list refresh
+  const id = r?.assignment?.resource_id;
+  if (id && !S.resById[id]) { try { S.resById[id] = await api('GET', `/resources/${id}`); } catch { /* shown as 'a helper' */ } }
+}
+async function refreshTracked() {   // faster loop for the one request the person is watching
+  const r = S.mine[S.trackId];
+  if (S.tab === 'need' && r && !TERMINAL.has(r.status)) {
+    try { const nr = await api('GET', `/requests/${S.trackId}`); await ensureHelper(nr); putMine(nr); noticeChanges(S.mine[S.trackId]); render(); } catch { /* the main loop reports connectivity */ }
+  }
+}
+function setConn(ok) { const c = $('#conn'); c.classList.toggle('off', !ok); $('span', c).textContent = ok ? 'System online' : 'Cannot reach the system'; }
+function render() { renderNeed(); renderHelp(); renderLive(); updateNearby(); drawMap(); }
+
+// ============================================================================ tabs
+function setTab(tab) {
+  if (!['need', 'help', 'live', 'system'].includes(tab)) tab = 'need';
+  S.tab = tab; history.replaceState(null, '', '#' + tab);
+  $$('nav button').forEach(b => b.setAttribute('aria-selected', b.dataset.tab === tab));
+  for (const t of ['need', 'help', 'live']) $('#v-' + t).hidden = t !== tab;
+  $('#layout').classList.toggle('full', tab === 'system');
+  let sys = $('#v-system');
+  if (tab === 'system') {
+    if (!sys) { sys = document.createElement('section'); sys.id = 'v-system';
+      sys.innerHTML = `<div class="sysnote">This is the storage cluster: 3 shards, each with a primary and a replica. Kill a pod and watch it heal. If it is blank, run <code>make k8s-dashboard</code>.</div>
+        <iframe class="sysframe" title="Storage cluster dashboard" src="${location.protocol}//${location.hostname}:8090/dashboard"></iframe>`; $('#panel').append(sys); }
+    sys.hidden = false;
+  } else if (sys) sys.hidden = true;
+  drawLegend(); if (map) { setTimeout(() => map.invalidateSize(), 50); drawMap(); }
+  if (tab === 'live' && map) fitMumbaiSoon();
+  refresh();
+}
+
+// ============================================================================ boot
+buildTiles(); updateHints(); initMap();
+$$('nav button').forEach(b => b.onclick = () => setTab(b.dataset.tab));
+$('#need-send').onclick = sendRequest; $('#help-send').onclick = sendOffer; $('#demo-res').onclick = demoResources; $('#demo-req').onclick = demoRequests;
+window.addEventListener('hashchange', () => setTab(location.hash.slice(1)));
+setTab(location.hash.slice(1) || 'need'); renderNeed();   // setTab starts the first refresh
+setInterval(refresh, 3000); setInterval(refreshTracked, 1200);
 </script>
 </body>
 </html>
