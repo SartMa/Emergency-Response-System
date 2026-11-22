@@ -154,11 +154,11 @@ Clients may set `IN_PROGRESS`, `FULFILLED` and `CANCELLED`. Only the matching sa
 
 ## 5. Storage tier (the distributed-systems core)
 
-### 5.1 Partitioning — DDIA ch. 7
+### 5.1 Partitioning
 - `partition = sha1(key) mod 12` (**12 fixed logical partitions**). Then `shard = partition_map[partition]`; initially partition `p` is assigned to shard `p mod 3`.
 - We use a stable hash (sha1), never Python's `hash()`, which is randomised per process.
 - Why not plain `hash mod 3`? Changing the shard count would move about 75% of keys. With fixed partitions, only whole partitions move (the Riak/Elasticsearch approach). Rebalancing itself is out of scope, but the design is ready for it.
-- **Terminology warning**: DDIA 2e uses *shard* for a piece of the data, and a node can hold many shards. Our spec uses *shard* for a replicated **group of nodes**. So our 12 *partitions* are what DDIA calls shards, and our 3 *shards* are what DDIA calls nodes (each replicated). DDIA calls this technique a "fixed number of shards".
+- **Terminology warning**: in much of the distributed-systems literature, *shard* means a piece of the data, and one node can hold many of them. Our spec uses *shard* for a replicated **group of nodes**. So our 12 *partitions* are those pieces of data, and each of our 3 *shards* is a replicated group of nodes. The technique is usually called "a fixed number of partitions".
 - This still satisfies the spec: it is hash-based partitioning, `hash(id) mod 12` followed by a table lookup instead of `mod 3`.
 
 ### 5.2 Storage node
@@ -168,18 +168,18 @@ Clients may set `IN_PROGRESS`, `FULFILLED` and `CANCELLED`. Only the matching sa
 - Deletes are **tombstones** (versioned), so a resync cannot bring a deleted key back.
 - `GET /internal/digest` returns `{key: [version, sha1(value)]}`, used for anti-entropy.
 
-### 5.3 Replication — DDIA ch. 6 (single-leader, synchronous)
+### 5.3 Replication (single-leader, synchronous)
 - Each shard has a **primary** and a **replica**, and the coordinator decides which is which. Nodes never promote themselves, so a split brain between nodes cannot happen.
 - Write path (the coordinator is the replication pipe): write to the primary (CAS, which assigns the version) → forward the same `(value, version)` to the replica → acknowledge the client **after both succeed**.
 - If the replica write fails: acknowledge anyway, mark the replica **STALE** (degraded mode, writes accepted with one copy). It gets resynced later.
 - Reads go to the **primary** only (read-your-writes).
 
-### 5.4 Failure detection and failover — DDIA ch. 9 (unreliable networks, timeouts)
+### 5.4 Failure detection and failover (unreliable networks, timeouts)
 - Heartbeat every **2 s**. Health states: `ALIVE → SUSPECT (>4 s) → DEAD (>6 s)`.
 - **Fast path**: if a request to the primary fails (connection error or timeout), the coordinator immediately marks it SUSPECT, **promotes the in-sync replica**, and retries the operation once. The client sees no error.
 - If both nodes of a shard are down, operations on that shard return `503`. Scatter-gather queries return `partial: true`.
 
-### 5.5 Recovery — DDIA ch. 6 "catch-up recovery"
+### 5.5 Recovery ("catch-up recovery")
 1. The node restarts with its PVC (old data intact) and calls `register` again. The coordinator marks it **RECOVERING**: it receives live writes but serves no reads.
 2. The coordinator calls `POST /internal/sync {source: current primary}`. The node compares digests and pulls only the keys that differ (a **delta**, not a full copy). Keys that exist only on the recovering node are **discarded**, because they were never acknowledged and the primary is authoritative.
 3. When the digests match, the node is marked **REPLICA (in sync)**. There is no automatic fail-back, to avoid flapping.
@@ -234,10 +234,10 @@ The cluster map is **rebuilt from heartbeats**: nodes re-register within about 2
 |---|---|---|---|
 | 01 | **Python 3.12 + FastAPI**, httpx, aio-pika, pydantic, managed with **uv** (workspace + lockfile) | Spring Boot, Node/Express | About 13 pods on one laptop: roughly 70 MB and under 1 s startup per Python pod, against roughly 300 MB and 5–15 s for Spring Boot. Fast startup also makes the pod-recovery and failover demos quick. Less boilerplate for a 3-day build; free OpenAPI `/docs`. The services are I/O-bound, so the GIL doesn't matter |
 | 02 | **3 microservices**: request, resource, matching | 2 services (request+matching) | Clear ownership (SRP); matching stays stateless and independently scalable; shows service-to-service calls |
-| 03 | **12 fixed partitions → 3 shards** | `mod 3`; consistent-hash ring | Rebalance-ready with little extra complexity (DDIA ch. 7) |
+| 03 | **12 fixed partitions → 3 shards** | `mod 3`; consistent-hash ring | Rebalance-ready with little extra complexity |
 | 04 | **SQLite per node on a PVC** | In-memory dict; Postgres/Redis per shard | Durable, zero-ops, gives a real local index. A managed DB would replicate itself and hide the part we're meant to build |
 | 05 | **Single-leader, synchronous, coordinator-driven replication** | Async; leaderless quorum | No acknowledged-write loss on failover; quorum needs ≥ 3 copies per shard |
-| 06 | **Optimistic concurrency** (versions, `If-Match`, 409) | Distributed locks; pessimistic locking | No lock leases or deadlocks; conflicts are rare and cheap to retry (DDIA ch. 8, "lost updates") |
+| 06 | **Optimistic concurrency** (versions, `If-Match`, 409) | Distributed locks; pessimistic locking | No lock leases or deadlocks; conflicts are rare and cheap to retry (the classic "lost update" problem) |
 | 07 | **Heartbeat + fail-fast on error** | Heartbeat only | Failover within one request instead of a 6 s outage |
 | 08 | **Delta resync by digest, primary wins** | Full copy; Merkle trees | Simple, correct with tombstones; fast because PVCs keep old data |
 | 09 | **Saga with compensation** for reserve → assign | 2PC | No blocking coordinator for transactions; fits microservices |
@@ -246,7 +246,7 @@ The cluster map is **rebuilt from heartbeats**: nodes re-register within about 2
 | 12 | **StatefulSet per shard**, Deployments for stateless services, Ingress gateway | Deployments everywhere | Storage needs a stable identity (`shard-1-0`) and its own volume |
 | 13 | **JSON logs + correlation ID + live dashboard** | Prometheus/Grafana stack | Highest demo value for the time; Prometheus `/metrics` is a stretch goal |
 | 14 | **Coordinator soft state** rebuilt from heartbeats | Persist the cluster map | Nothing to corrupt; restart is self-healing |
-| 15 | **Location is data, not placement**: the client sends lat/lon in the body; keys are sharded by hash of ID; matching scatter-gathers candidates and ranks by haversine distance | Geo-sharding (shard by region or geohash); global secondary index on (type, geohash cell) | A disaster concentrates load in one region, so geo-sharding would overload exactly one shard when it matters most. Hashing spreads the load evenly. Scatter-gather is cheap at our scale; a global geo index is how this would scale (DDIA ch. 7) |
+| 15 | **Location is data, not placement**: the client sends lat/lon in the body; keys are sharded by hash of ID; matching scatter-gathers candidates and ranks by haversine distance | Geo-sharding (shard by region or geohash); global secondary index on (type, geohash cell) | A disaster concentrates load in one region, so geo-sharding would overload exactly one shard when it matters most. Hashing spreads the load evenly. Scatter-gather is cheap at our scale; a global geo index is how this would scale |
 | 16 | **Retry with exponential backoff + jitter** when storage is unavailable (0.2 s doubling to a 2 s cap, 5 retries); `Retry-After: 2` header on every 503 for outside clients | Fail immediately; retry at a fixed interval | Immediate or fixed-interval retries from every caller hit a recovering component at the same moments (retry storm). Doubling the wait reduces load while it recovers; jitter stops callers retrying in lockstep. Only "not applied" errors (503, connect refused) are retried; a timeout mid-request returns 504 because the outcome is unknown |
 
 ### Design patterns used (SADP)
@@ -297,13 +297,13 @@ SOLID: SRP (one responsibility per service and module), OCP (new strategy = new 
 
 ### 8.4 Plan and handover
 
-**Phase A: Claude + Sarthak, until handover (~1.5 days, about 11-17 morning)**
+**Phase A: Sarthak, until handover (~1.5 days, about 11-17 morning)**
 1. uv workspace, `common` package (models, partitioner, logging, correlation ID).
 2. Storage node + coordinator: routing, replication, heartbeats, failover, resync, `/locate`, dashboard. Storage tests.
 3. request-, resource- and matching-service + RabbitMQ (Tier 1 topology: priority queue, DLQ). Saga with cancel compensation.
 4. docker-compose with everything running end to end; unit, integration and concurrency tests passing.
 5. K8s manifests (first version, smoke-tested on minikube).
-6. `HANDOVER.md` (what's done, how to run, what's left) + Commands section in CLAUDE.md filled in.
+6. `HANDOVER.md` (what's done, how to run, what's left) + `CONTRIBUTING.md` (rules and commands).
 
 **Phase B: friend, after handover**
 1. Harden the minikube deployment (Ingress addon, probes, scaling).
@@ -319,11 +319,11 @@ SOLID: SRP (one responsibility per service and module), OCP (new strategy = new 
 |---|---|
 | Language | Python 3.12 + FastAPI, uv (ADR-01) |
 | Resource capacity | Quantity on resource and request, no splitting (FR-17) |
-| Partitioning | 12 fixed partitions → 3 shards (ADR-03). Sarthak to confirm after reading DDIA ch. 7 |
+| Partitioning | 12 fixed partitions → 3 shards (ADR-03) |
 | Scope | Tier 1 now, Tier 2 progressively (§2.2, §8.4) |
 | Gateway | minikube Ingress addon |
 | Team | Friend takes over at ~1.5 days (§8.4) |
-| Friend and Python | Fine; friend works with Claude Code using CLAUDE.md + HANDOVER.md |
+| Friend and Python | Fine; the friend works from CONTRIBUTING.md + HANDOVER.md |
 | Freeze | Approved 2026-11-16 |
 
 ---

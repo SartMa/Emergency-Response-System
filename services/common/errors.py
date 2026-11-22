@@ -1,4 +1,4 @@
-"""One error format for every service (CLAUDE.md):
+"""One error format for every service (CONTRIBUTING.md):
 
     {"error": {"code": "...", "message": "...", "correlation_id": "..."}}
 

@@ -1,7 +1,7 @@
 # Handover: Phase A → Phase B
 
 Written 2026-11-16 at the end of Phase A. Deadline **2026-11-20** (moved from 11-18).
-Read this first, then `DESIGN.md` (the why) and `CLAUDE.md` (the rules + commands).
+Read this first, then `DESIGN.md` (the why) and `CONTRIBUTING.md` (the rules + commands).
 
 ## 1. Where things stand
 
@@ -63,7 +63,7 @@ Keep `http://localhost:8090/dashboard` visible next to the terminal the whole ti
 
 A good story for the demo: on the live board, show the Palghar request waiting ("No one nearby yet"). Then on *I can help* offer food near Palghar, and watch that request get matched by itself, with nobody pressing "match" (the wake-up from Tier 2).
 
-**Starting clean:** `make k8s-delete && make k8s-deploy`, reopen the two port-forwards, then `./scripts/demo/00-seed-mumbai.sh`. (`k8s-delete` now really wipes the data; before 2026-11-18 it silently left the old data behind, see CLAUDE.md gotchas.)
+**Starting clean:** `make k8s-delete && make k8s-deploy`, reopen the two port-forwards, then `./scripts/demo/00-seed-mumbai.sh`. (`k8s-delete` now really wipes the data; before 2026-11-18 it silently left the old data behind, see the gotchas in CONTRIBUTING.md.)
 
 To understand how everything fits together, read `HOW_IT_WORKS.md`.
 
@@ -124,7 +124,7 @@ The checklist is kept below for re-testing after future changes.
 
 ## 5. Known limitations (say them before the examiner does)
 
-- **Single coordinator**: if its pod dies, storage is unavailable for about 5–7 s until Kubernetes restarts it and nodes re-register. Services ride most of that out with exponential backoff (ADR-16); a few requests may still get 503 with `Retry-After`. Required by the spec (1 coordinator). Mitigated by soft state; a fix would need consensus (DDIA ch. 10).
+- **Single coordinator**: if its pod dies, storage is unavailable for about 5–7 s until Kubernetes restarts it and nodes re-register. Services ride most of that out with exponential backoff (ADR-16); a few requests may still get 503 with `Retry-After`. Required by the spec (1 coordinator). Mitigated by soft state; a fix would need a consensus protocol such as Raft.
 - **Hot resource**: many requests for the same resource are processed one after another (correct but slower: about 30 per second). Spread-out load scales with pods.
 - **RabbitMQ down**: requests are still stored (201 within ~2 s, `queued_for_matching: false`) and the reconciler re-sends them within about 45 s of RabbitMQ returning. A `request.cancelled` event lost while RabbitMQ is down is not repaired automatically: the quantity stays reserved until the matching saga next sees that request.
 - **Coordinator CPU**: every storage operation goes through one Python process. Under chaos load with many retries it saturates about 1 core and latency rises from ~25 ms to ~1 s. Correctness holds. Scaling it out would need partitioned coordinators or consensus.
@@ -138,7 +138,7 @@ The checklist is kept below for re-testing after future changes.
 - **Why 12 partitions and not `mod 3`?** Going to 4 shards would move about 75% of keys with mod-N, against 25% with fixed partitions. `tests/unit/test_domain.py::test_fixed_partitions_move_fewer_keys_than_mod_n` proves it.
 - **Why synchronous replication?** A write is acknowledged only once it is on both nodes, so failover never loses an acknowledged write. The cost is latency, and degraded mode when the replica is down.
 - **How do you avoid split brain?** Nodes never promote themselves. Only the single coordinator assigns roles.
-- **What happens to writes the old primary had but never replicated?** They were never acknowledged, so on resync the node is made identical to the new primary ("primary wins"), and those writes are discarded (DDIA ch. 6).
+- **What happens to writes the old primary had but never replicated?** They were never acknowledged, so on resync the node is made identical to the new primary ("primary wins"), and those writes are discarded.
 - **How do you prevent two matchers taking the same units?** Compare-and-set on a per-key version. The loser gets 409, re-reads and re-checks quantity. No locks.
 - **Why a saga and not a transaction?** The request and resource are on different shards and owned by different services. Reserve → assign, with release as compensation if assign fails.
 - **At-least-once delivery: what if a message is processed twice?** Matching skips requests that aren't PENDING/UNMATCHED, and reserve is idempotent per `request_id`.

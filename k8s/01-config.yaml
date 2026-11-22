@@ -1,4 +1,4 @@
-# All configuration is env vars (CLAUDE.md rule). Change values here, then `kubectl rollout restart`.
+# All configuration is env vars (project rule, see CONTRIBUTING.md). Change values here, then `kubectl rollout restart`.
 apiVersion: v1
 kind: ConfigMap
 metadata:

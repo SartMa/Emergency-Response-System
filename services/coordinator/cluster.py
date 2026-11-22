@@ -66,7 +66,7 @@ class NodeInfo:
 @dataclass
 class Timing:
     suspect_after_s: float = 4.0  # 2 missed heartbeats
-    dead_after_s: float = 6.0  # 3 missed heartbeats (DDIA ch. 9: any timeout is a trade-off)
+    dead_after_s: float = 6.0  # 3 missed heartbeats (any timeout is a trade-off)
     forming_grace_s: float = 5.0  # after a coordinator (re)start, wait for nodes to re-register
 
 

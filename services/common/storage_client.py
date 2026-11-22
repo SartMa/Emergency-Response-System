@@ -1,6 +1,6 @@
 """Adapter: the distributed key-value store, as seen by request- and resource-service.
 
-Services talk ONLY to the coordinator (CLAUDE.md rule); they never know which shard or node
+Services talk ONLY to the coordinator (CONTRIBUTING.md rule); they never know which shard or node
 holds a key (spec §4: "The client should not need to know the physical storage location").
 
 This is the Repository pattern's storage port: domain code asks for "get / put with version",
@@ -85,7 +85,7 @@ class StorageClient:
             raise
 
     async def query(self, kind: str, type_: str | None = None, status: str | None = None) -> tuple[list[Versioned], bool]:
-        """Scatter-gather over all shards (DDIA ch. 7, local secondary indexes).
+        """Scatter-gather over all shards (each answers from its local secondary index).
         Returns (items, partial): partial=True if some shard could not answer (NFR-11)."""
         params = {"kind": kind}
         if type_:

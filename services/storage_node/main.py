@@ -165,7 +165,7 @@ def dump(limit: int = Query(50, le=1000)):
 
 @app.post("/internal/sync")
 async def sync(body: SyncBody):
-    """Catch-up recovery (DESIGN.md §5.5, DDIA ch. 6). Make this node identical to `source_url`
+    """Catch-up recovery (DESIGN.md §5.5). Make this node identical to `source_url`
     (the current primary), copying only the keys that differ: a delta, not a full copy.
 
       1. fetch the primary's digest and compare it with ours;
