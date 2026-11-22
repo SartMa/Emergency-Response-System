@@ -90,12 +90,12 @@ This is the part the course is about. Source: `services/common/partitioner.py`, 
 `partition = int(sha1(key)[:8]) mod 12`, then `shard = partition_map[partition]`. The map is a plain table: partition p → shard p mod 3, so each shard owns 4 partitions.
 
 - We use **sha1, not Python's `hash()`**, because `hash()` is randomised per process: two services would disagree about where a key lives.
-- **Why 12 partitions and not `hash mod 3`?** If you ever go from 3 to 4 shards, `mod 3 → mod 4` moves ~75% of all keys. With fixed partitions you hand over whole partitions: 3 of 12 move, 25%, the minimum possible. A unit test (`test_fixed_partitions_move_fewer_keys_than_mod_n`) demonstrates it. (DDIA calls this "a fixed number of shards"; careful: DDIA's *shard* is our *partition*, and our *shard* is a replicated group of nodes.)
+- **Why 12 partitions and not `hash mod 3`?** If you ever go from 3 to 4 shards, `mod 3 → mod 4` moves ~75% of all keys. With fixed partitions you hand over whole partitions: 3 of 12 move, 25%, the minimum possible. A unit test (`test_fixed_partitions_move_fewer_keys_than_mod_n`) demonstrates it. (The technique is usually called "a fixed number of partitions". Careful with the words: elsewhere *shard* often means a piece of data, while in this project a *shard* is a replicated group of nodes.)
 - Location is **data, not placement**: a request in Kurla and a resource 1 km away usually live on different shards. That is fine, because matching *scatter-gathers* the candidates. Sharding by region would put all the load of one flood on one shard (ADR-15).
 
 ### 4.2 One storage node
 
-A node (`store.py`) is a SQLite file with one table: `key, kind, type, status, value (JSON), version, deleted, updated_at`, and an index on `(kind, type, status)`. That index is a **local secondary index** (DDIA ch. 7): each node can answer "available water resources" for the keys *it* holds; the coordinator merges the answers.
+A node (`store.py`) is a SQLite file with one table: `key, kind, type, status, value (JSON), version, deleted, updated_at`, and an index on `(kind, type, status)`. That index is a **local secondary index**: each node can answer "available water resources" for the keys *it* holds; the coordinator merges the answers.
 
 Three properties make everything else possible:
 
@@ -117,7 +117,7 @@ A node is deliberately **dumb**: it doesn't know if it's primary or replica. The
 
 So an acknowledged write is on the primary **and** on the replica, unless the replica was already known to be broken. The whole thing runs inside `asyncio.shield`, so a client hanging up mid-write can't leave it half-done.
 
-Sync vs async replication (DDIA ch. 6): synchronous means no acknowledged write is lost when the primary dies, at the cost of write latency and of reduced guarantees in degraded mode.
+Synchronous vs asynchronous replication: synchronous means no acknowledged write is lost when the primary dies, at the cost of write latency and of reduced guarantees in degraded mode.
 
 ### 4.4 The read path
 
@@ -139,7 +139,7 @@ The **invariant** everything protects: *only an IN_SYNC node may be promoted to 
 
 ### 4.6 Detecting failure (two paths)
 
-- **Heartbeats.** Every storage node posts a heartbeat every 2 s (carrying key counts and its `version_sum`). The coordinator's monitor loop runs every 0.5 s: no heartbeat for >4 s → **SUSPECT**; >6 s → **DEAD** (and STALE; and if it was primary, failover). DDIA ch. 9: any timeout is a guess; 6 s is "3 missed beats", a balance between slow detection and false alarms.
+- **Heartbeats.** Every storage node posts a heartbeat every 2 s (carrying key counts and its `version_sum`). The coordinator's monitor loop runs every 0.5 s: no heartbeat for >4 s → **SUSPECT**; >6 s → **DEAD** (and STALE; and if it was primary, failover). Any timeout is a guess; 6 s is "3 missed beats", a balance between slow detection and false alarms.
 - **Fast path.** When a request to the primary fails with *connection refused/reset* (a killed pod), the coordinator doesn't wait for the heartbeat timeout: it fails over immediately and retries the operation once on the new primary. The client sees no error.
 - **A slow node is not a dead node.** A *read timeout* on an open connection only means "no answer yet". The coordinator does **not** fail over on that (a chaos run showed that doing so multiplied failovers and load). It first does "read repair" for a write whose outcome is unknown, then answers 503 so the client retries.
 
@@ -155,7 +155,6 @@ The **invariant** everything protects: *only an IN_SYNC node may be promoted to 
 4. The coordinator compares both digests. Identical *and* node still SYNCING → **IN_SYNC**. Different (a live write raced with the sync) → sync again, up to 5 times.
 5. The node does **not** take the primary role back (no flapping).
 
-DDIA ch. 6, "follower failure: catch-up recovery".
 
 ### 4.9 Elections and the coordinator's memory
 
@@ -171,7 +170,7 @@ The coordinator keeps the cluster map **in memory only** (soft state, ADR-14). I
 
 ### 5.1 Optimistic concurrency: the idea that holds it all together
 
-Problem ("lost update", DDIA ch. 8): two matchers read a resource with 6 units left, both subtract 4, both write "2 left". One subtraction is lost, and 8 units were handed out from 6.
+Problem (the classic "lost update"): two matchers read a resource with 6 units left, both subtract 4, both write "2 left". One subtraction is lost, and 8 units were handed out from 6.
 
 Solution: no locks. Every record carries a **version**. A writer says "replace version 7 with this", and the store refuses if the current version isn't 7. The loser gets a conflict, re-reads (now version 8, 2 units left), and decides again.
 
@@ -345,7 +344,7 @@ One self-contained page (`services/request_service/static/index.html`, ~750 line
 
 ## 13. Known limitations (say them before the examiner does)
 
-- **One coordinator** (required by the spec) is a single point of failure for ~5–7 s per restart, and a throughput bottleneck: under heavy chaos load it saturates one CPU core. A fix needs consensus (DDIA ch. 10) or partitioned coordinators.
+- **One coordinator** (required by the spec) is a single point of failure for ~5–7 s per restart, and a throughput bottleneck: under heavy chaos load it saturates one CPU core. A fix needs a consensus protocol such as Raft, or partitioned coordinators.
 - **The restart election uses `version_sum`**, a heuristic, not a real replicated log position.
 - **If a shard's last primary loses its disk for good**, the shard stays unavailable until an operator steps in (deliberate CP).
 - **A `request.cancelled` event lost while RabbitMQ is down** isn't repaired automatically; the units stay reserved.

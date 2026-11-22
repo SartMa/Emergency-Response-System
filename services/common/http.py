@@ -1,5 +1,5 @@
 """HTTP plumbing shared by all services: correlation-ID middleware, health endpoint, and an
-httpx client that forwards the correlation ID on every outgoing call (CLAUDE.md rule)."""
+httpx client that forwards the correlation ID on every outgoing call (CONTRIBUTING.md rule)."""
 
 import logging
 import time

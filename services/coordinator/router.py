@@ -226,8 +226,8 @@ class Router:
                               code="PRIMARY_CHANGED")
 
     async def query(self, kind: str, type_: str | None, status: str | None) -> dict:
-        """Scatter-gather: ask every shard's primary in parallel and merge the answers (DDIA ch. 7,
-        "local secondary indexes"). If a shard cannot answer we still return the others, with
+        """Scatter-gather: ask every shard's primary in parallel and merge the answers (each
+        shard answers from its local secondary index). If a shard cannot answer we still return the others, with
         partial=True, rather than failing the whole query (NFR-11)."""
         params = {"kind": kind}
         if type_:

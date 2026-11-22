@@ -6,7 +6,7 @@ Every key has a monotonically increasing `version`:
   * deletes are versioned tombstones, so a resync can never bring a deleted key back.
 
 `kind`, `type` and `status` are copied out of the JSON value into indexed columns. That is a
-*local secondary index* (DDIA ch. 7): each node can answer "available water resources" for
+*local secondary index*: each node can answer "available water resources" for
 the keys it holds, and the coordinator merges the answers from all shards (scatter-gather).
 """
 
@@ -161,7 +161,7 @@ class KVStore:
         """Resync only: make our copy identical to the primary's, even if ours looks "newer".
         A higher local version means a write that was never acknowledged (we crashed or were
         cut off before replicating it). The primary is authoritative, so it is discarded
-        (DESIGN.md §5.5, DDIA ch. 6, "Handling node outages")."""
+        (DESIGN.md §5.5)."""
         with self._lock:
             self._write(key, value, version, deleted)
 

@@ -4,7 +4,7 @@ Reserve is where over-allocation is prevented (FR-18). Two matching pods may try
 the last units of the same tanker at the same moment. Both read version 7; both try to write
 with expected_version=7; storage accepts exactly one and answers 409 to the other, which
 re-reads (now version 8, fewer units) and re-checks. No locks, and no way to oversell
-(ADR-06, DDIA ch. 8 "Preventing lost updates", compare-and-set).
+(ADR-06: compare-and-set prevents lost updates).
 """
 
 import asyncio

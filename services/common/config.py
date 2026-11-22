@@ -1,6 +1,6 @@
 """Configuration helpers.
 
-All configuration comes from environment variables (CLAUDE.md rule). In Kubernetes they are
+All configuration comes from environment variables (CONTRIBUTING.md rule). In Kubernetes they are
 injected from a ConfigMap; in docker-compose they are set in docker-compose.yml.
 """
 

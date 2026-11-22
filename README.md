@@ -15,7 +15,7 @@ client → Ingress → request-service ─┐            ┌→ matching-service
 | [`DESIGN.md`](DESIGN.md) | requirements, architecture, ADRs, design patterns |
 | [`HOW_IT_WORKS.md`](HOW_IT_WORKS.md) | the system under the hood, step by step, with viva Q&A |
 | [`HANDOVER.md`](HANDOVER.md) | status, how to run, demo runbook, what's left, viva notes |
-| [`CLAUDE.md`](CLAUDE.md) | coding rules and commands |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | coding rules, commands and gotchas |
 
 ## Quick start
 
@@ -47,3 +47,7 @@ Kubernetes (minikube): `make k8s-start k8s-build k8s-deploy`, then `make k8s-gat
 | POST | `/match/{requestId}` | match on demand | 200 |
 
 Errors: `{"error": {"code", "message", "correlation_id"}}` with 400 / 404 / 409 / 503. Interactive docs are at `/docs` on each service.
+
+## Acknowledgements
+
+The storage-tier design (partitioning, replication, failure detection, optimistic concurrency) draws on ideas from Martin Kleppmann's *Designing Data-Intensive Applications*.

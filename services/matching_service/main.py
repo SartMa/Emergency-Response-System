@@ -2,7 +2,7 @@
 POST /match/{requestId}.
 
 Stateless, so it scales horizontally: every pod consumes from the same queue and RabbitMQ
-hands each message to exactly one of them (Competing Consumers, DDIA ch. 12 "load balancing").
+hands each message to exactly one of them (Competing Consumers pattern).
 
 Retries and wake-ups (FR-19, rules in policies.py):
   * no resource -> the command is re-published to erm.retry with a growing delay

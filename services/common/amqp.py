@@ -184,7 +184,7 @@ class AmqpClient:
             raise Unavailable(f"Publish failed: {exc.__class__.__name__}", code="BROKER_UNAVAILABLE")
 
     def _wrap(self, handler: Handler) -> Callable[[AbstractIncomingMessage], Awaitable[None]]:
-        """Manual-ack consumer (CLAUDE.md rule):
+        """Manual-ack consumer (CONTRIBUTING.md rule):
         - success          -> ack
         - Unavailable      -> a dependency is briefly down (e.g. a shard failing over):
                               wait 1 s, then requeue so it is tried again

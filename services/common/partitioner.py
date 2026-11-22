@@ -2,7 +2,7 @@
 
 key --sha1--> one of NUM_PARTITIONS fixed partitions --partition map--> shard
 
-Terminology: our "partition" = DDIA's "shard"; our "shard" = a replicated group of nodes.
+Terminology: our "partition" is a slice of the key space; our "shard" is a replicated group of nodes.
 
 Why 12 fixed partitions instead of `hash mod 3`: if the number of shards ever changes,
 `mod N` would move ~75% of keys, while with fixed partitions only whole partitions move
