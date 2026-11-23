@@ -30,17 +30,17 @@ def test_fixed_partitions_move_fewer_keys_than_mod_n():
     keys = [f"req:{i}" for i in range(4000)]
     import hashlib
 
-    def h(k):
-        return int.from_bytes(hashlib.sha1(k.encode()).digest()[:8], "big")
+    def sha1_int(key):
+        return int.from_bytes(hashlib.sha1(key.encode()).digest()[:8], "big")
 
-    moved_mod = sum(h(k) % 3 != h(k) % 4 for k in keys) / len(keys)
-    old = Partitioner({p: p % 3 for p in range(12)})
-    new_map = dict(old.partition_map)
+    moved_by_mod = sum(sha1_int(k) % 3 != sha1_int(k) % 4 for k in keys) / len(keys)
+    before = Partitioner({p: p % 3 for p in range(12)})
+    reassigned_map = dict(before.partition_map)
     for p in (0, 4, 8):  # hand one partition from each old shard to the new shard 3
-        new_map[p] = 3
-    new = Partitioner(new_map)
-    moved_fixed = sum(old.shard_of(k) != new.shard_of(k) for k in keys) / len(keys)
-    assert moved_mod > 0.7 and moved_fixed < 0.3
+        reassigned_map[p] = 3
+    after = Partitioner(reassigned_map)
+    moved_by_fixed = sum(before.shard_of(k) != after.shard_of(k) for k in keys) / len(keys)
+    assert moved_by_mod > 0.7 and moved_by_fixed < 0.3
 
 
 # ---------------------------------------------------------------- geo
@@ -57,11 +57,11 @@ def make_request(**kw):
 
 
 def test_request_happy_path():
-    r = make_request(quantity=2)
-    r = rq.assign(r, rq.Assignment(resource_id="x", quantity=2, distance_km=1.5))
-    r = rq.transition(r, rq.RequestStatus.IN_PROGRESS)
-    r = rq.transition(r, rq.RequestStatus.FULFILLED)
-    assert [h["status"] for h in r.history] == ["PENDING", "ASSIGNED", "IN_PROGRESS", "FULFILLED"]
+    req = make_request(quantity=2)
+    req = rq.assign(req, rq.Assignment(resource_id="x", quantity=2, distance_km=1.5))
+    req = rq.transition(req, rq.RequestStatus.IN_PROGRESS)
+    req = rq.transition(req, rq.RequestStatus.FULFILLED)
+    assert [entry["status"] for entry in req.history] == ["PENDING", "ASSIGNED", "IN_PROGRESS", "FULFILLED"]
 
 
 def test_terminal_states_are_final():
@@ -93,8 +93,8 @@ def test_reserve_and_release_are_idempotent():
     res = make_resource(5)
     res, changed = rs.reserve(res, "req-1", 3)
     assert changed and res.availability.quantity_remaining == 2
-    res2, changed = rs.reserve(res, "req-1", 3)  # redelivered message: no double take
-    assert not changed and res2.availability.quantity_remaining == 2
+    redelivered, changed = rs.reserve(res, "req-1", 3)  # redelivered message: no double take
+    assert not changed and redelivered.availability.quantity_remaining == 2
     res, changed = rs.release(res, "req-1")
     assert changed and res.availability.quantity_remaining == 5 and res.allocations == []
     _, changed = rs.release(res, "req-1")
@@ -146,21 +146,21 @@ async def test_retry_only_on_unavailable():
     from services.common.errors import Unavailable
     from services.common.retry import retry_unavailable
 
-    calls = {"n": 0}
+    attempts = {"n": 0}
 
     async def flaky():
-        calls["n"] += 1
-        if calls["n"] < 3:
+        attempts["n"] += 1
+        if attempts["n"] < 3:
             raise Unavailable("shard failing over")
         return "ok"
 
-    assert await retry_unavailable(flaky, "test") == "ok" and calls["n"] == 3
+    assert await retry_unavailable(flaky, "test") == "ok" and attempts["n"] == 3
 
     async def conflict():
-        calls["n"] += 1
+        attempts["n"] += 1
         raise Conflict("not an outage")
 
-    calls["n"] = 0
+    attempts["n"] = 0
     with pytest.raises(Conflict):
         await retry_unavailable(conflict, "test")
-    assert calls["n"] == 1  # answered, not retried
+    assert attempts["n"] == 1  # answered, not retried

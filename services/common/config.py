@@ -8,10 +8,10 @@ import os
 
 
 def env_str(name: str, default: str | None = None) -> str:
-    value = os.environ.get(name, default)
-    if value is None:
+    raw = os.environ.get(name, default)
+    if raw is None:
         raise RuntimeError(f"Missing required environment variable {name}")
-    return value
+    return raw
 
 
 def env_int(name: str, default: int) -> int:

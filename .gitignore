@@ -8,3 +8,4 @@ chaos-report.json
 ansible/inventory.ini
 ansible/credentials/
 ansible/build/
+.env

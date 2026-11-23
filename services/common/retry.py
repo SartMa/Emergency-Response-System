@@ -31,8 +31,8 @@ def backoff_delay(attempt: int, base: float = BASE_DELAY_S, cap: float = MAX_DEL
                   rand: Callable[[], float] = random.random) -> float:
     """Delay before retry number `attempt` (1-based): exponential, capped, with "equal jitter"
     (half fixed, half random), so the delay is never near zero and never synchronised."""
-    ceiling = min(cap, base * 2 ** (attempt - 1))
-    return ceiling / 2 + rand() * ceiling / 2
+    upper_bound = min(cap, base * 2 ** (attempt - 1))
+    return upper_bound / 2 + rand() * upper_bound / 2
 
 
 async def retry_unavailable(call: Callable[[], Awaitable[T]], what: str, max_retries: int = MAX_RETRIES) -> T:
@@ -42,8 +42,8 @@ async def retry_unavailable(call: Callable[[], Awaitable[T]], what: str, max_ret
     for attempt in range(1, max_retries + 1):
         try:
             return await call()
-        except Unavailable as exc:
-            delay = backoff_delay(attempt)
-            log.warning(f"{what} unavailable ({exc.code}); retry {attempt}/{max_retries} in {delay:.2f}s")
-            await asyncio.sleep(delay)
+        except Unavailable as err:
+            wait_s = backoff_delay(attempt)
+            log.warning(f"{what} unavailable ({err.code}); retry {attempt}/{max_retries} in {wait_s:.2f}s")
+            await asyncio.sleep(wait_s)
     return await call()  # last try: let the error propagate to the caller (-> 503 + Retry-After)

@@ -18,8 +18,8 @@ NUM_SHARDS = 3
 def partition_of(key: str) -> int:
     # sha1, NOT Python's hash(): hash() is randomised per process (PYTHONHASHSEED), so two
     # services would disagree about where a key lives.
-    digest = hashlib.sha1(key.encode("utf-8")).digest()
-    return int.from_bytes(digest[:8], "big") % NUM_PARTITIONS
+    sha1_bytes = hashlib.sha1(key.encode("utf-8")).digest()
+    return int.from_bytes(sha1_bytes[:8], "big") % NUM_PARTITIONS
 
 
 def default_partition_map(num_partitions: int = NUM_PARTITIONS, num_shards: int = NUM_SHARDS) -> dict[int, int]:
@@ -38,5 +38,5 @@ class Partitioner:
         return self.partition_map[partition_of(key)]
 
     def locate(self, key: str) -> tuple[int, int]:
-        p = partition_of(key)
-        return p, self.partition_map[p]
+        partition = partition_of(key)
+        return partition, self.partition_map[partition]

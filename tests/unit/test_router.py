@@ -16,18 +16,18 @@ from services.coordinator.cluster import ClusterState, Timing
 from services.coordinator.router import Router
 
 
-def cluster() -> ClusterState:
-    t = time.monotonic()
-    state = ClusterState(num_shards=1, now=t - 10, timing=Timing(4, 6, forming_grace_s=0))
-    state.register("n0", 0, "http://n0", now=t)
-    state.register("n1", 0, "http://n1", now=t)
-    state.tick(now=t)  # elects n0 (lowest id)
+def build_cluster() -> ClusterState:
+    t0 = time.monotonic()
+    state = ClusterState(num_shards=1, now=t0 - 10, timing=Timing(4, 6, forming_grace_s=0))
+    state.register("n0", 0, "http://n0", now=t0)
+    state.register("n1", 0, "http://n1", now=t0)
+    state.tick(now=t0)  # elects n0 (lowest id)
     state.mark_syncing("n1")
-    state.mark_in_sync("n1", now=t, pulled=0)
+    state.mark_in_sync("n1", now=t0, pulled=0)
     return state
 
 
-def router_with_nodes(state: ClusterState, failover_during_put: bool, new_primary_down: bool = False):
+def make_router(state: ClusterState, failover_during_put: bool, new_primary_down: bool = False):
     stores: dict[str, dict] = {"n0": {}, "n1": {}}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -55,7 +55,7 @@ def router_with_nodes(state: ClusterState, failover_during_put: bool, new_primar
 async def test_timed_out_write_is_read_repaired_without_failover():
     """The primary applied the write but its answer timed out (busy, not dead). We must not fail
     a live node over on a guess, and the write that did land must reach the replica."""
-    state = cluster()
+    state = build_cluster()
     stores: dict[str, dict] = {"n0": {}, "n1": {}}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -79,22 +79,22 @@ async def test_timed_out_write_is_read_repaired_without_failover():
 
 
 async def test_normal_write_is_replicated():
-    state = cluster()
-    router, stores = router_with_nodes(state, failover_during_put=False)
+    state = build_cluster()
+    router, stores = make_router(state, failover_during_put=False)
     assert await router.put("req:a", {"x": 1}, expected_version=0) == 1
     assert "req:a" in stores["n0"] and "req:a" in stores["n1"]
 
 
 async def test_write_during_failover_reaches_the_new_primary():
-    state = cluster()
-    router, stores = router_with_nodes(state, failover_during_put=True)
+    state = build_cluster()
+    router, stores = make_router(state, failover_during_put=True)
     await router.put("req:a", {"x": 1}, expected_version=0)
     assert state.primary[0] == "n1"
     assert "req:a" in stores["n1"]  # the new primary has it, so the acknowledgement is honest
 
 
 async def test_write_during_failover_is_not_acknowledged_if_new_primary_missed_it():
-    state = cluster()
-    router, _ = router_with_nodes(state, failover_during_put=True, new_primary_down=True)
+    state = build_cluster()
+    router, _ = make_router(state, failover_during_put=True, new_primary_down=True)
     with pytest.raises(Unavailable):  # 503: the client retries, and no false promise is made
         await router.put("req:a", {"x": 1}, expected_version=0)
