@@ -31,7 +31,7 @@
   .note { border-left: 4px solid var(--teal); background: var(--soft); padding: 7px 11px; margin: 8px 0; break-inside: avoid; }
   .note b.t { color: var(--teal); }
   figure { margin: 8px 0 10px; text-align: center; break-inside: avoid; }
-  figure img { width: 100%; max-width: 640px; height: auto; border: 1px solid var(--line); border-radius: 6px; }
+  figure img { width: 100%; max-width: 600px; height: auto; border: 1px solid var(--line); border-radius: 6px; }
   figcaption { font-size: 9px; color: var(--muted); margin-top: 4px; }
   ol, ul { margin: 4px 0 8px; padding-left: 20px; }
   li { margin-bottom: 4px; }
@@ -60,7 +60,7 @@
 <p>The system follows a microservice architecture communicating via synchronous REST APIs at the ingress edge and asynchronous message streaming in the matching core:</p>
 <figure>
   <img src="../architecture.png" alt="System architecture and request flow diagram">
-  <figcaption>Figure 1: System architecture and request flow (gateway, services, RabbitMQ, saga-based matching and the sharded storage tier).</figcaption>
+  <figcaption>Figure 1: System architecture and request flow. The gateway routes to the Request, Matching (POST /match) and Resource services; Request and Resource publish events to RabbitMQ, Matching consumes them and calls the other two over HTTP (saga); the services reach the sharded storage tier only through the Coordinator.</figcaption>
 </figure>
 
 <h3>Lifecycle of an Emergency Request</h3>
