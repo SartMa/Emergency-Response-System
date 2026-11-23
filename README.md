@@ -35,7 +35,7 @@ The system solves the critical challenge of **asynchronous, low-latency, zero-ov
 
 ![System architecture and request flow](docs/architecture.png)
 
-*Figure 1: Clients reach the API gateway; the Request, Resource and Coordinator services sit behind it. Requests are queued in RabbitMQ, matched by competing Matching Service replicas through a saga, and persisted in the sharded, replicated key-value storage tier.*
+*Figure 1: The gateway routes to the Request, Matching (`POST /match`) and Resource services. Request and Resource publish events to RabbitMQ; Matching replicas consume them and call the other two services over HTTP (saga: reserve, assign, compensate). Services reach the sharded, replicated storage tier only through the Coordinator.*
 
 ### End-to-End Request Lifecycle
 1. **Request Intake**: A client posts an emergency request (`POST /requests`) with item type, quantity, urgency (1–5), and lat/long coordinates.
