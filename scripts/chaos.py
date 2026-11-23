@@ -235,7 +235,7 @@ class Chaos:
     # ------------------------------------------------------------------ run
     async def run(self) -> int:
         if not await self.wait_healthy(30):
-            log("cluster is not healthy before the test; fix that first (see HANDOVER.md)")
+            log("cluster is not healthy before the test; fix that first (see README.md)")
             return 2
         await self.setup()
         started = time.time()
