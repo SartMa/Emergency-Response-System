@@ -33,7 +33,7 @@ The system solves the critical challenge of **asynchronous, low-latency, zero-ov
 
 ![System architecture and request flow](docs/architecture.png)
 
-*Figure 1: The gateway routes to the Request, Matching (`POST /match`) and Resource services. Request and Resource publish events to RabbitMQ; Matching replicas consume them and call the other two services over HTTP (saga: reserve, assign, compensate). Services reach the sharded, replicated storage tier only through the Coordinator.*
+*Figure 1 (dashed arrows are asynchronous RabbitMQ events, solid arrows are synchronous HTTP calls): The gateway routes to the Request, Matching (`POST /match`) and Resource services. Request and Resource publish events to RabbitMQ; Matching replicas consume them and call the other two services over HTTP (saga: reserve, assign, compensate). Services reach the sharded, replicated storage tier only through the Coordinator.*
 
 ### End-to-End Request Lifecycle
 1. **Request Intake**: A client posts an emergency request (`POST /requests`) with item type, quantity, urgency (1–5), and lat/long coordinates.
@@ -281,6 +281,27 @@ The project extends significantly beyond the original basic course specification
 - **Exponential Backoff with Jitter & Retry-After Headers**:
   - *Decision*: Storage client calls implement truncated exponential backoff with full jitter. HTTP 503 responses include a `Retry-After` header.
   - *Rationale*: Prevents thundering herds from overwhelming storage nodes during primary elections or coordinator restarts.
+- **Saga with Compensation Instead of Two-Phase Commit**:
+  - *Decision*: Matching reserves quantity on the Resource Service, then assigns the request on the Request Service; if the second step fails or the request is cancelled, a compensating release returns the quantity.
+  - *Rationale*: Two-phase commit would need a blocking transaction coordinator across services. A saga holds no cross-service locks, and every step is idempotent, so retries after a timeout are safe.
+- **Single-Leader Synchronous Replication**:
+  - *Decision*: Each shard has one primary and one replica. A write goes to the primary and is replicated to the follower before the client is answered; reads are served by the primary.
+  - *Rationale*: No acknowledged write is lost on failover and clients read their own writes. A follower that misses a write is marked STALE and is never promoted until it has resynced. Leaderless quorums would need at least 3 copies per shard.
+- **Optimistic Concurrency Instead of Locks**:
+  - *Decision*: Every record carries a version, and updates are compare-and-set on it (`If-Match`, `409` on conflict).
+  - *Rationale*: No distributed locks, lease timeouts or deadlocks. Conflicts are rare and cheap to retry, and this is what prevents a depot from being over-allocated.
+- **Priority, Delayed-Retry and Dead-Letter Queues**:
+  - *Decision*: `matching.q` is a priority queue (urgency 1-5), unmatched requests wait in per-delay retry queues (2 s to 32 s), and undeliverable messages go to `erm.dlq`.
+  - *Rationale*: Urgent requests are served first, scarcity does not cause busy-looping, a retry backlog cannot block new requests (retries use the lowest priority), and poison messages are isolated.
+- **Reconciler and Idempotent Consumers Instead of a Transactional Outbox**:
+  - *Decision*: A background sweeper in the Request Service re-sends requests stuck in `PENDING`, and the matching saga skips requests that are no longer matchable.
+  - *Rationale*: An outbox needs an atomic write across storage and the message queue, which our store cannot offer. The reconciler gives eventual delivery, and duplicate messages are harmless.
+- **Coordinator Keeps Only Soft State**:
+  - *Decision*: The cluster map is rebuilt from node heartbeats after a restart instead of being stored.
+  - *Rationale*: There is nothing to corrupt or recover. Kubernetes restarts the coordinator pod and the map reappears within seconds.
+- **Services Own Their Data; Storage Only Through the Coordinator**:
+  - *Decision*: The Matching Service stores nothing and reads or changes requests and resources only through the owning services' APIs. The Request and Resource services reach storage only through the Coordinator.
+  - *Rationale*: Clear ownership keeps matching stateless and independently scalable, and no service needs to know which shard or node holds a key.
 
 ---
 
