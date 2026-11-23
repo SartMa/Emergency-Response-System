@@ -273,12 +273,12 @@ The project extends significantly beyond the original basic course specification
 
 ---
 
-### 7.2 Architectural Decision Records (ADRs)
+### 7.2 Key Design Decisions
 
-- **ADR-15: Location is Data, Not Shard Placement Key**:
+- **Location is Data, Not Shard Placement Key**:
   - *Decision*: Partition keys are computed by hashing the entity key (UUID) rather than from geolocation coordinates.
   - *Rationale*: Partitioning by geo-location (e.g. city or postal zone) causes severe hotspotting during disasters where 99% of requests originate from a single affected area. Hashing spreads write load evenly across all shards, while geo-distance is evaluated in memory during matching.
-- **ADR-16: Exponential Backoff with Jitter & Retry-After Headers**:
+- **Exponential Backoff with Jitter & Retry-After Headers**:
   - *Decision*: Storage client calls implement truncated exponential backoff with full jitter. HTTP 503 responses include a `Retry-After` header.
   - *Rationale*: Prevents thundering herds from overwhelming storage nodes during primary elections or coordinator restarts.
 

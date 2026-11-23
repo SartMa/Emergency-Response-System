@@ -241,10 +241,10 @@ make cloud-tunnel</code></pre>
   <li><b>Replica Consistency:</b> <code>GET /internal/verify</code> verifies that primary and replica state digests match identically across all shards.</li>
 </ol>
 
-<h2>8. Architectural Decision Records (ADRs)</h2>
+<h2>8. Key Design Decisions</h2>
 <ul>
-  <li><b>ADR-15: Location is Data, Not Shard Placement Key:</b> Partition keys are computed by hashing the entity key (UUID) rather than from geo-coordinates. Partitioning by geographic region creates catastrophic hotspotting in disaster epicenters. Hashing distributes load uniformly across shards, while geo-proximity is evaluated in memory.</li>
-  <li><b>ADR-16: Exponential Backoff with Full Jitter:</b> Storage client calls implement truncated exponential backoff with jitter, honoring <code>Retry-After</code> HTTP headers on 503s. Prevents stampeding herd effects when nodes fail over or when the coordinator restarts.</li>
+  <li><b>Location is Data, Not Shard Placement Key:</b> Partition keys are computed by hashing the entity key (UUID) rather than from geo-coordinates. Partitioning by geographic region creates catastrophic hotspotting in disaster epicenters. Hashing distributes load uniformly across shards, while geo-proximity is evaluated in memory.</li>
+  <li><b>Exponential Backoff with Full Jitter:</b> Storage client calls implement truncated exponential backoff with jitter, honoring <code>Retry-After</code> HTTP headers on 503s. Prevents stampeding herd effects when nodes fail over or when the coordinator restarts.</li>
 </ul>
 
 <h2>9. Conclusion</h2>
