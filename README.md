@@ -13,8 +13,11 @@ client → Ingress → request-service ─┐            ┌→ matching-service
 ## Quick start
 
 ```bash
-make up        # docker compose: landing page + API on http://localhost:8080, dashboard on http://localhost:8090/dashboard
-make test      # unit + integration tests
+make up                        # Linux / macOS (runs: docker compose up -d --build)
+docker compose up -d --build   # Windows (PowerShell / CMD) or without make
+# Landing page + API on http://localhost:8080 (or :8085 via .env), dashboard on http://localhost:8090/dashboard
+
+make test                      # unit + integration tests
 
 curl -X POST localhost:8080/resources -H 'Content-Type: application/json' \
   -d '{"type":"water","name":"Tanker","quantity":20,"location":{"lat":19.06,"lon":72.83}}'
