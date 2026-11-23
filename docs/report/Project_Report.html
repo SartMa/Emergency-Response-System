@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Distributed Emergency Resource Matching System - Project Report</title>
+<style>
+  @page { size: A4; margin: 16mm 15mm 18mm 15mm; @bottom-right { content: counter(page); font: 9px "Segoe UI", sans-serif; color: #555; } }
+  :root { --teal: #0f766e; --ink: #1f2937; --muted: #4b5563; --line: #d6dde3; --soft: #f3f7f8; }
+  * { box-sizing: border-box; }
+  body { font-family: "Segoe UI", Arial, sans-serif; font-size: 10.2px; line-height: 1.5; color: var(--ink); margin: 0; }
+  header { text-align: center; padding-bottom: 12px; border-bottom: 2px solid var(--teal); margin-bottom: 14px; }
+  header .inst { color: var(--teal); font-weight: 700; letter-spacing: .4px; font-size: 11px; }
+  header .course { font-size: 11px; margin: 4px 0 10px; }
+  header h1 { font-size: 21px; margin: 0 0 8px; line-height: 1.2; }
+  header .authors { font-size: 11px; line-height: 1.6; }
+  header .repo { margin-top: 8px; font-size: 10px; color: var(--muted); }
+  h2 { font-size: 13.5px; color: var(--teal); margin: 18px 0 6px; padding-bottom: 3px; border-bottom: 1px solid var(--line); break-after: avoid; }
+  h3 { font-size: 11.5px; margin: 12px 0 5px; break-after: avoid; }
+  p { margin: 0 0 7px; text-align: justify; }
+  code { font-family: Consolas, "Courier New", monospace; font-size: 9.2px; background: #eef4f4; color: #0b5e57; padding: 0 3px; border-radius: 3px; }
+  pre { font-family: Consolas, "Courier New", monospace; font-size: 9px; line-height: 1.45; border-radius: 6px; padding: 9px 12px; margin: 6px 0 10px; white-space: pre; break-inside: avoid; }
+  pre.dark { background: #0f172a; color: #e2e8f0; }
+  pre.tree { background: var(--soft); border: 1px solid var(--line); color: #1f2937; }
+  pre code { background: none; color: inherit; padding: 0; font-size: inherit; }
+  table { width: 100%; border-collapse: collapse; margin: 6px 0 10px; font-size: 9.3px; }
+  th { background: #eaf3f3; color: #0b3f3b; text-align: left; }
+  th, td { border: 1px solid var(--line); padding: 5px 7px; vertical-align: top; }
+  tr { break-inside: avoid; }
+  thead { display: table-header-group; }
+  td.k { font-weight: 600; }
+  .note { border-left: 4px solid var(--teal); background: var(--soft); padding: 7px 11px; margin: 8px 0; break-inside: avoid; }
+  .note b.t { color: var(--teal); }
+  figure { margin: 8px 0 10px; text-align: center; break-inside: avoid; }
+  figure img { width: 100%; max-width: 640px; height: auto; border: 1px solid var(--line); border-radius: 6px; }
+  figcaption { font-size: 9px; color: var(--muted); margin-top: 4px; }
+  ol, ul { margin: 4px 0 8px; padding-left: 20px; }
+  li { margin-bottom: 4px; }
+  .m { white-space: nowrap; }
+  .pb { break-before: page; }
+  a { color: var(--teal); text-decoration: none; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="inst">INTERNATIONAL INSTITUTE OF INFORMATION TECHNOLOGY, BANGALORE (IIIT-B)</div>
+  <div class="course">Course: Cloud Computing</div>
+  <h1>Distributed Emergency Resource Matching System</h1>
+  <div class="authors">Harsh Mohta &nbsp;|&nbsp; Roll No: <code>IMT2023106</code><br>Sarthak Maheshwari &nbsp;|&nbsp; Roll No: <code>IMT2023014</code></div>
+  <div class="repo">GitHub: <a href="https://github.com/SartMa/Emergency-Response-System">https://github.com/SartMa/Emergency-Response-System</a><br>
+  Branches: <code>main</code> (application, Docker, Kubernetes) &nbsp;|&nbsp; <code>feature/cloud</code> (everything in <code>main</code> + Ansible cloud deployment)</div>
+</header>
+
+<h2>1. Executive Summary &amp; Project Description</h2>
+<p>In major humanitarian crises, rapid, reliable, and fair matching of emergency supplies (potable water, food, medicine, evacuation transport, shelter) to victims is vital. Traditional monolithic architectures suffer from single points of failure, bottlenecked database locks, and catastrophic geographic over-allocation under concurrent request spikes.</p>
+<p>The <b>Distributed Emergency Resource Matching System</b> is an end-to-end cloud-native platform designed to tackle emergency coordination at scale. The platform ingests high-volume emergency requests and resource registrations asynchronously, prioritizes life-threatening requests using message broker priority queues, determines the nearest matching supply depot using great-circle (Haversine) distance calculations, and coordinates atomic assignments via a distributed saga orchestrator without distributed 2-phase commit locking.</p>
+<p>At its core, the platform operates on top of a custom-designed, sharded, replicated, self-healing distributed key-value storage tier. The architecture guarantees zero data loss, durable cancellations, and no resource over-allocation, backed by an automated chaos-testing suite that verifies system invariants under continuous live process termination.</p>
+
+<h2>2. End-to-End System Architecture &amp; Flow</h2>
+<p>The system follows a microservice architecture communicating via synchronous REST APIs at the ingress edge and asynchronous message streaming in the matching core:</p>
+<figure>
+  <img src="../architecture.png" alt="System architecture and request flow diagram">
+  <figcaption>Figure 1: System architecture and request flow (gateway, services, RabbitMQ, saga-based matching and the sharded storage tier).</figcaption>
+</figure>
+
+<h3>Lifecycle of an Emergency Request</h3>
+<ol>
+  <li><b>Intake:</b> Client submits <code>POST /requests</code> specifying item type, needed quantity, urgency level (1 to 5), and geographic coordinates (latitude, longitude).</li>
+  <li><b>Hashed Shard Storage:</b> Request Service queries the Coordinator for the partition mapping (SHA-1 hash of the key into 12 fixed partitions, mapped to 3 shards) and persists the record to the appropriate primary storage shard.</li>
+  <li><b>Asynchronous Prioritized Enqueuing:</b> An event is emitted to RabbitMQ's <code>matching.q</code> with message priority set equal to the request urgency. Critical medical requests bypass lower-urgency requests in the queue.</li>
+  <li><b>Distributed Saga Matching:</b> A competing matching worker consumes the event, filters candidate resources within the maximum radius (e.g. 50 km), and initiates the saga:
+    <ul>
+      <li><i>Reserve (CAS):</i> Optimistically reserves quantity on the Resource Service. Conflicts are re-attempted with exponential jitter.</li>
+      <li><i>Assign:</i> Updates the request status to <code>ASSIGNED</code> with assigned resource ID and computed distance.</li>
+      <li><i>Compensate:</i> If assignment fails or a user cancels an assigned request, a compensation command automatically returns the quantity to the resource depot.</li>
+    </ul></li>
+  <li><b>Auto-Retry &amp; Supply Wake-Up:</b> If no inventory is immediately available, the request transitions to <code>UNMATCHED</code> and enters delay-specific retry queues. When new inventory is registered or freed, wake-up events trigger re-matching.</li>
+</ol>
+
+<h2>3. Deep-Dive: Major Infrastructure &amp; Cloud Components</h2>
+<table>
+  <thead><tr><th style="width:15%">Component</th><th style="width:30%">Architecture &amp; Role</th><th>Implementation &amp; Cloud Engineering</th></tr></thead>
+  <tbody>
+  <tr><td class="k">Docker &amp; Containerization</td><td>Microservice containerization ensuring identical behavior in local development and cloud production.</td><td>One unified <code>Dockerfile</code> on <code>python:3.12-slim</code> with the <code>uv</code> package manager, parameterized via the <code>SERVICE</code> build argument (one image per service, shared <code>services/common</code> layer). Dependency layer caching and unprivileged non-root user execution. <code>docker-compose.yml</code> reproduces the full topology locally.</td></tr>
+  <tr><td class="k">Kubernetes (Minikube)</td><td>Container orchestration, declarative self-healing, automated scheduling, and traffic routing.</td><td>Full manifest suite in <code>k8s/</code>: stateless Deployments (Request, Resource, Matching, Coordinator), StatefulSets with PersistentVolumeClaims for the storage shards and RabbitMQ, NGINX Ingress controller, and cluster ConfigMap.</td></tr>
+  <tr><td class="k">Horizontal Pod Autoscaler (HPA)</td><td>Elastic scaling responding dynamically to real-time disaster request surges.</td><td>HPA on <code>matching-service</code> scales from 2 up to 5 pods when average pod CPU exceeds 50% of its request, pulling metrics via the Kubernetes <code>metrics-server</code>. Matching pods are stateless competing consumers, so extra pods add throughput directly.</td></tr>
+  <tr><td class="k">Jenkins CI/CD</td><td>Continuous Integration &amp; Automated Delivery pipeline.</td><td>Automates linting, isolated unit test execution with mock storage/AMQP adapters, multi-service container builds, integration smoke tests against live clusters, and container image publishing.</td></tr>
+  <tr><td class="k">Ansible <i>(branch <code>feature/cloud</code>)</i></td><td>Infrastructure as Code (IaC) configuration management: one command turns a fresh Ubuntu VM into a running copy of the whole system.</td><td>Playbook <code>ansible/site.yml</code> runs four idempotent roles. <code>common</code>: installs Docker and base packages and removes the Oracle image's blanket iptables REJECT rules. <code>k3s</code>: installs single-node Kubernetes (k3s) with Traefik Ingress, metrics-server and local-path storage. <code>app</code>: ships the committed code (<code>git archive</code>), builds the 5 service images on the VM, generates the RabbitMQ password, applies the same <code>k8s/</code> manifests and waits for rollout. <code>smoke_test</code>: checks the landing page and API over the public IP. Run with <code>make cloud-deploy</code>.</td></tr>
+  <tr><td class="k">Cloud Principles</td><td>High availability, fault isolation, and graceful degradation.</td><td>Strict adherence to 12-Factor cloud principles: configuration through environment variables, stateless compute tiers, explicit dependency isolation, concurrency via process scaling, failure isolation across distinct shards, and crash-only idempotency.</td></tr>
+  <tr><td class="k">RabbitMQ Broker</td><td>Asynchronous event bus and decoupled workload distribution.</td><td>Priority queues (<code>x-max-priority: 5</code>), Dead Letter Exchange (<code>erm.dlq</code>), and per-delay backoff queues (<code>matching.retry.2s..32s</code>) eliminating head-of-line blocking.</td></tr>
+  <tr><td class="k">Sharded Storage Tier</td><td>Distributed partitioned key-value store with synchronous replication.</td><td>Keys are hashed (SHA-1) into 12 fixed partitions mapped across 3 physical shards, so re-balancing moves whole partitions only. Single-leader replication (1 primary, 1 replica per shard). Each node is a versioned SQLite store in WAL mode with compare-and-set writes and versioned delete tombstones.</td></tr>
+  <tr><td class="k">Coordinator Node</td><td>Cluster health monitoring and failover arbiter.</td><td>Central heartbeat monitor (heartbeat interval 2 s, suspect after 4 s, dead after 6 s). Automated failover promoting in-sync replicas. Rebuilds the partition map from heartbeats after a restart and powers the live web operations dashboard.</td></tr>
+  </tbody>
+</table>
+
+<h2>4. REST API Endpoints &amp; Project Structure</h2>
+<h3>Primary REST API Endpoints</h3>
+<table>
+  <thead><tr><th style="width:7%">Method</th><th style="width:21%">Endpoint</th><th style="width:12%">Category</th><th>Purpose &amp; Behavior</th></tr></thead>
+  <tbody>
+  <tr><td><code>POST</code></td><td><code>/requests</code></td><td>Public API</td><td>Creates an emergency request (type, quantity, urgency 1-5, lat/lon). Enqueues to RabbitMQ. Returns <code>201 Created</code>.</td></tr>
+  <tr><td><code>GET</code></td><td><code>/requests/{id}</code></td><td>Public API</td><td>Fetches request status (<code>PENDING</code>, <code>ASSIGNED</code>, <code>UNMATCHED</code>, <code>FULFILLED</code>), assigned resource, and audit history. <code>GET /requests</code> lists requests, filterable by status and type.</td></tr>
+  <tr><td><code>PUT</code></td><td><code>/requests/{id}/status</code></td><td>Public API</td><td>Updates status. Setting <code>CANCELLED</code> triggers saga compensation releasing allocated inventory back to the depot.</td></tr>
+  <tr><td><code>POST</code></td><td><code>/resources</code></td><td>Public API</td><td>Registers a supply depot (name, location, total capacity quantity, item type). Returns <code>201 Created</code>.</td></tr>
+  <tr><td><code>GET</code></td><td><code>/resources/{id}</code></td><td>Public API</td><td>Retrieves depot inventory, remaining available quantity, and list of active allocations. <code>GET /resources</code> lists resources, filterable by type and status.</td></tr>
+  <tr><td><code>PUT</code></td><td><code>/resources/{id}/status</code></td><td>Public API</td><td>Administrative status updates: toggle online/offline state or restock additional inventory quantity.</td></tr>
+  <tr><td><code>POST</code></td><td><code>/match/{requestId}</code></td><td>Public API</td><td>Triggers a manual, synchronous on-demand matching evaluation for a specific request ID.</td></tr>
+  <tr><td><code>GET</code></td><td><code>/internal/cluster</code></td><td>Diagnostics</td><td>Exposes cluster topology: active nodes, partition maps, heartbeat ages, and replication sync status.</td></tr>
+  <tr><td><code>GET</code></td><td><code>/internal/queues</code></td><td>Diagnostics</td><td>Real-time RabbitMQ metrics: queue depths, unacked messages, consumer count, and in/out throughput.</td></tr>
+  <tr><td><code>GET</code></td><td><code>/internal/locate/{key}</code></td><td>Diagnostics</td><td>Inspects data partitioning: resolves key &rarr; partition number &rarr; physical shard &rarr; primary/replica URLs.</td></tr>
+  <tr><td><code>GET</code></td><td><code>/internal/verify</code></td><td>Diagnostics</td><td>Scans all shards, computes state digests, and verifies primary/replica consistency.</td></tr>
+  <tr><td><code>GET</code></td><td><code>/dashboard</code></td><td>Operations UI</td><td>Interactive cluster visualization rendered by the Coordinator, showing shard status and partition mapping.</td></tr>
+  </tbody>
+</table>
+
+<h3>Project Structure</h3>
+<pre class="tree"><code>Emergency-Response-System/
+├── services/                      # application microservices (Python 3.12, FastAPI)
+│   ├── common/                    # shared: amqp, config, errors, geo, http, logging, models,
+│   │                              #         partitioner, retry, storage_client
+│   ├── coordinator/               # cluster.py (failure detector), router.py, dashboard.html
+│   ├── matching_service/          # saga.py, strategies.py (nearest / balanced), policies.py
+│   ├── request_service/           # domain.py (state machine), service.py, static/index.html (map UI)
+│   ├── resource_service/          # domain.py (reserve / release), service.py
+│   └── storage_node/              # store.py (versioned SQLite store), replication, resync
+├── k8s/                           # Kubernetes manifests (namespace, config, RabbitMQ, coordinator,
+│                                  #   storage StatefulSets, services, ingress, HPA)
+├── deploy/gateway/nginx.conf      # NGINX API gateway used by Docker Compose
+├── scripts/
+│   ├── chaos.py                   # chaos-testing harness (random node kills + 6 invariants)
+│   ├── ui_e2e.py                  # browser end-to-end check
+│   ├── demo/                      # demo scripts 00 ... 10
+│   └── cloud-tunnel.sh            # [feature/cloud] SSH tunnel to the cloud cluster
+├── tests/
+│   ├── unit/                      # domain, router, saga, storage, tier-2 policy tests
+│   └── integration/               # end-to-end tests against a running stack
+├── ansible/                       # [feature/cloud] cloud deployment (IaC)
+│   ├── site.yml                   # playbook: common -> k3s -> app -> smoke_test
+│   ├── group_vars/all.yml         # versions, service list, RabbitMQ credentials lookup
+│   ├── inventory.ini.example      # VM address template
+│   └── roles/{common,k3s,app,smoke_test}/tasks/main.yml
+├── docs/                          # architecture.png and report source
+├── Dockerfile                     # one image per service (SERVICE build argument)
+├── docker-compose.yml             # full local topology (12 services)
+├── Makefile                       # up, test, chaos, k8s-*, cloud-* targets
+├── pyproject.toml / uv.lock       # dependencies
+├── README.md
+└── Project_Report.pdf             # this report</code></pre>
+
+<h2>5. Project Setup &amp; Execution Guide</h2>
+<div class="note"><b class="t">Source code &amp; branches</b><br>
+Repository: <a href="https://github.com/SartMa/Emergency-Response-System">https://github.com/SartMa/Emergency-Response-System</a><br>
+<code>main</code> &mdash; the complete application with Docker Compose and Kubernetes (Minikube) deployment.<br>
+<code>feature/cloud</code> &mdash; the same project plus the <code>ansible/</code> directory for deploying to a cloud VM.</div>
+
+<div class="note"><b class="t">Fastest Local Start: Docker Compose</b><br>
+Docker Compose provides the same microservice topology as Kubernetes without requiring Minikube, Kubernetes, or Ansible on the developer workstation.</div>
+
+<h3>Step-by-Step Local Deployment</h3>
+<pre class="dark"><code># 1. Start all 12 services: RabbitMQ, coordinator, 6 storage nodes, 3 services, gateway
+docker compose up -d --build
+
+# 2. Verify all containers are healthy and operational
+docker compose ps
+
+# 3. Access UIs in your web browser:
+#    - Interactive Map &amp; Public API:  http://localhost:8080  (or :8085 if configured in .env)
+#    - Cluster Health Dashboard:       http://localhost:8090/dashboard
+#    - RabbitMQ Management Console:    http://localhost:15672  (guest / guest)
+
+# 4. Stop containers and purge local persistent storage volumes
+docker compose down -v</code></pre>
+
+<h3>Step-by-Step Kubernetes Deployment (Minikube)</h3>
+<pre class="dark"><code># 1. Initialize Minikube with sufficient resources &amp; add-ons
+minikube start --cpus=4 --memory=6g
+minikube addons enable ingress
+minikube addons enable metrics-server
+
+# 2. Build images on the host and load directly into Minikube
+make k8s-build
+
+# 3. Apply all declarative Kubernetes manifests and await rollouts
+make k8s-deploy
+make k8s-status
+
+# 4. Expose services via local port-forwarding
+make k8s-gateway    # Gateway on localhost:8080
+make k8s-dashboard  # Dashboard on localhost:8090/dashboard
+make k8s-rabbitmq   # RabbitMQ Management on localhost:15673</code></pre>
+
+<h3>Cloud Deployment with Ansible (branch <code>feature/cloud</code>)</h3>
+<pre class="dark"><code># 1. Switch to the branch that contains the ansible/ directory
+git checkout feature/cloud
+
+# 2. Create the VM (Ubuntu 22.04/24.04, ports 22 and 80 open), then put its IP in the inventory
+cp ansible/inventory.ini.example ansible/inventory.ini
+
+# 3. One command installs k3s, builds the images on the VM and deploys everything (~10 min)
+make cloud-deploy        # app is then live at http://&lt;vm-ip&gt;/
+
+# 4. Control the cloud cluster from the laptop over SSH (kubectl, demos, tests, chaos)
+make cloud-tunnel</code></pre>
+
+<h2>6. Our Unique Additions Beyond the Problem Statement</h2>
+<p>The core course problem statement specified basic request-resource matching. In our implementation, we extended the system with critical real-world cloud engineering capabilities:</p>
+<ul>
+  <li><b>Real Geolocation Proximity Matching:</b> Replaced arbitrary string matching with physical coordinates (lat/long) evaluated via the spherical Haversine formula. Built on the <i>Strategy Pattern</i> supporting both <code>nearest</code> and <code>balanced</code> (distributing load across multiple nearby depots) algorithms.</li>
+  <li><b>Urgency Prioritization (1-5):</b> Integrated directly with RabbitMQ priority queues (<code>x-max-priority: 5</code>). Critical medical needs jump ahead of general supply inquiries automatically.</li>
+  <li><b>Capacity Quantities &amp; Zero Over-Allocation:</b> Modeled fractional inventory allocation (e.g. requesting 4 units from a depot with 20). Enforced strict <b>Optimistic Concurrency Control (OCC)</b> using record versioning and <code>If-Match</code> headers. Under a high-concurrency test of 50 concurrent requests targeting a depot with 10 units, exactly 10 were assigned and 64 write conflicts were cleanly resolved without any over-allocation.</li>
+  <li><b>Automated Exponential Backoff Retries &amp; Supply Wake-Up:</b> Unmatched requests enter queue-specific TTL retry queues (avoiding head-of-line blocking). Furthermore, registering, restocking, or cancelling supplies publishes a wake-up event on <code>matching.wakeup.q</code> that awakens waiting requests.</li>
+  <li><b>Distributed Saga &amp; Cancellation Compensation:</b> Cancelling an assigned request triggers a compensating saga transaction that reliably returns allocated units to the depot without distributed 2PC transactions.</li>
+  <li><b>Live Cluster Dashboard &amp; Shard Locator:</b> Real-time operations dashboard showing live node health, shard partitions, sync status, and RabbitMQ metrics. Endpoint <code>GET /internal/locate/{key}</code> exposes the deterministic partition hash for any entity.</li>
+  <li><b>Status History Audit Trail:</b> Every state change appends a timestamped record to the entity history log, providing traceability for audits and debugging.</li>
+  <li><b>Interactive Web GIS Frontend:</b> Embedded Leaflet + OpenStreetMap web interface with live markers, status filters, and match visualization lines served directly from the gateway.</li>
+</ul>
+
+<h2>7. Identified Design Flaws &amp; The 9 Chaos-Tested Bug Fixes</h2>
+<p>Rather than merely asserting fault tolerance, we authored an automated <b>Chaos Engineering Harness</b> (<code>scripts/chaos.py</code>). The harness streams continuous client traffic while randomly executing process kills against storage primary and replica nodes. This testing exposed <b>9 subtle distributed systems flaws</b> that were systematically diagnosed and fixed:</p>
+<table>
+  <thead><tr><th style="width:3%">#</th><th style="width:17%">Identified Flaw</th><th style="width:40%">Root Cause &amp; Distributed Failure Mode</th><th>Engineering Resolution &amp; Verification</th></tr></thead>
+  <tbody>
+  <tr><td>1</td><td>Unconditional <code>IN_SYNC</code> Resync Race</td><td>A node completing delta resync set its status to <code>IN_SYNC</code> unconditionally, overwriting a <code>STALE</code> status assigned during a transient write failure. Resulted in a replica silently lacking writes.</td><td>Enforced strict state-machine transition: only a node in <code>SYNCING</code> state is permitted to transition to <code>IN_SYNC</code>. Verified by unit test.</td></tr>
+  <tr><td>2</td><td>Stale Replica Election &amp; Data Loss</td><td>When a primary died while its replica was <code>STALE</code>, the coordinator elected the stale replica based on raw version count. When the former primary rebooted, it resynced <i>from the stale node</i>, deleting acknowledged data.</td><td>Implemented <b>Election Safety Rule</b>: Coordinator refuses to elect a stale node; the shard enters temporary unavailable state until the last known primary rejoins.</td></tr>
+  <tr><td>3</td><td>Write Racing Failover Split-Brain</td><td>A write in flight during failover was accepted by the old primary, missed the new primary, but was acknowledged as successful (HTTP 201) to the client.</td><td>Writes now replicate to all available shard peers; storage clients reject writes with HTTP 503 unless acknowledged by the active primary.</td></tr>
+  <tr><td>4</td><td>False Failovers on Slow Reads</td><td>Transient CPU or disk latency caused read timeouts, triggering the client to declare the node dead and force unnecessary coordinator failovers.</td><td>Failovers trigger exclusively on hard network disconnections (<code>ConnectionRefused</code> / <code>ConnectionReset</code>). Timed-out writes trigger idempotent <b>read repair</b>.</td></tr>
+  <tr><td>5</td><td>Saga Phantom Compensation</td><td>A network timeout during the Assign step was misclassified as an assign failure, triggering compensation that released quantity even though the assign succeeded upstream.</td><td>Refactored saga to perform idempotent retries on timeout, re-read on conflict, compensate only on definitive domain failure, and resume from held reservations.</td></tr>
+  <tr><td>6</td><td>Thundering Herd Wake-Up Storm</td><td>A newly registered supply triggered wake-up scans for all 50 waiting requests, causing ~37 redundant write conflicts and saturating coordinator CPU.</td><td>Bounded wake-up matching strictly to the quantity of newly registered units and coalesced rapid burst wake-up events.</td></tr>
+  <tr><td>7</td><td>Dead-Lettering Benign Cancels &amp; 504s</td><td>Cancelling a request that had never been assigned, as well as transient HTTP 504 gateway timeouts, routed messages directly into the Dead Letter Queue.</td><td>Separated permanent errors from transient timeouts: cancels on unassigned items are safe no-ops; 504s are requeued with backoff.</td></tr>
+  <tr><td>8</td><td>Synchronous RabbitMQ Publish Hangs</td><td>During RabbitMQ restarts, synchronous publishing calls blocked the FastAPI event loop, freezing HTTP workers until the Ingress timed out.</td><td>Configured non-blocking publish timeouts (2 s) with graceful degraded response (<code>queued_for_matching: false</code>) while a background reconciler backfills.</td></tr>
+  <tr><td>9</td><td>HTTP Keep-Alive Timeout Skew</td><td>Uvicorn server keep-alive was set to 5 s while client HTTP connection pools used a longer default. Sockets were closed by the server mid-handshake, causing intermittent 502s.</td><td>Tuned Uvicorn server keep-alive to 75 s, strictly exceeding client socket reuse timeouts and eliminating false 502 connection resets.</td></tr>
+  </tbody>
+</table>
+
+<h3>Six Invariant Guarantees Verified by Chaos Suite</h3>
+<ol>
+  <li><b>Strict Durability:</b> Every acknowledged request is durably persisted on disk across pod restarts.</li>
+  <li><b>Durable Cancellations:</b> No acknowledged cancellation is ever reverted or lost during node failovers.</li>
+  <li><b>No Over-Allocation:</b> No resource depot is ever allocated beyond its registered physical capacity.</li>
+  <li><b>Conservation of Resources:</b> Remaining capacity strictly equals <code>quantity_total - sum(active_allocations)</code>.</li>
+  <li><b>No Orphaned Requests:</b> No request is left stranded indefinitely in <code>PENDING</code> status.</li>
+  <li><b>Replica Consistency:</b> <code>GET /internal/verify</code> verifies that primary and replica state digests match identically across all shards.</li>
+</ol>
+
+<h2>8. Architectural Decision Records (ADRs)</h2>
+<ul>
+  <li><b>ADR-15: Location is Data, Not Shard Placement Key:</b> Partition keys are computed by hashing the entity key (UUID) rather than from geo-coordinates. Partitioning by geographic region creates catastrophic hotspotting in disaster epicenters. Hashing distributes load uniformly across shards, while geo-proximity is evaluated in memory.</li>
+  <li><b>ADR-16: Exponential Backoff with Full Jitter:</b> Storage client calls implement truncated exponential backoff with jitter, honoring <code>Retry-After</code> HTTP headers on 503s. Prevents stampeding herd effects when nodes fail over or when the coordinator restarts.</li>
+</ul>
+
+<h2>9. Conclusion</h2>
+<p>The <b>Distributed Emergency Resource Matching System</b> demonstrates that high-throughput, fault-tolerant distributed systems can be designed and operated using lightweight, self-contained cloud technologies. By combining event-driven messaging, distributed sagas, consistent-hash sharding, and rigorous chaos engineering, the system reliably coordinates emergency disaster relief under extreme operational conditions. The full source code is available at <a href="https://github.com/SartMa/Emergency-Response-System">github.com/SartMa/Emergency-Response-System</a> (branches <code>main</code> and <code>feature/cloud</code>).</p>
+
+</body>
+</html>
