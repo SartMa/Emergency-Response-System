@@ -4,7 +4,8 @@
 Harsh Mohta (`IMT2023106`) &middot; Sarthak Maheshwari (`IMT2023014`)  
 *Course: Cloud Computing &mdash; International Institute of Information Technology, Bangalore (IIIT-B)*
 
-**GitHub:** <https://github.com/SartMa/Emergency-Response-System>
+**GitHub:** <https://github.com/SartMa/Emergency-Response-System>  
+**Live deployment:** <http://129.225.104.44/> (cloud VM deployed with the Ansible playbook on the `feature/cloud` branch)  
 **Project report:** [`Project_Report.pdf`](Project_Report.pdf)
 
 ### Branches
